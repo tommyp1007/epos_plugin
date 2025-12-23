@@ -29,8 +29,6 @@ class _WidthSettingsState extends State<WidthSettings> {
   void initState() {
     super.initState();
     _loadSettings();
-    // Moved _checkAutoDetectCapability to didChangeDependencies 
-    // to access Language Provider safely on load.
   }
 
   @override
@@ -207,45 +205,62 @@ class _WidthSettingsState extends State<WidthSettings> {
 
               const SizedBox(height: 20),
               Text(lang.translate('lbl_advanced'), style: const TextStyle(fontWeight: FontWeight.bold)), // TRANSLATED
+              const SizedBox(height: 5), // Added small spacing
               
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // --- TEXT FIELD (Expanded) ---
                   Expanded(
                     child: TextField(
                       controller: _widthController,
                       keyboardType: TextInputType.number,
-                      // Ensure ruler updates when typing manually
                       onChanged: (val) => setState(() {}), 
-                      decoration: InputDecoration(
-                        border: const OutlineInputBorder(),
-                        labelText: lang.translate('lbl_dots'), // TRANSLATED
-                        helperText: lang.translate('hint_dots'), // TRANSLATED
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(), 
+                        // Removed helperText here to keep the box height strict
+                        // 16.0 padding usually results in ~56px height on standard themes
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                       ),
                     ),
                   ),
                   const SizedBox(width: 10),
                   
-                  // --- AUTO DETECT BUTTON ---
-                  SizedBox(
-                    height: 55,
-                    child: ElevatedButton.icon(
-                      // Disable button if not Android or not InnerPrinter
-                      onPressed: _canAutoDetect ? _handleAutoDetect : null, 
-                      icon: const Icon(Icons.perm_device_information),
-                      label: Text(lang.translate('btn_auto_detect')), // TRANSLATED
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.teal,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: Colors.grey[300],
-                        disabledForegroundColor: Colors.grey[600],
+                  // --- AUTO DETECT BUTTON (Expanded to match width) ---
+                  Expanded(
+                    child: SizedBox(
+                      height: 53, // Enforced height to match TextField
+                      child: ElevatedButton.icon(
+                        // Disable button if not Android or not InnerPrinter
+                        onPressed: _canAutoDetect ? _handleAutoDetect : null, 
+                        icon: const Icon(Icons.perm_device_information),
+                        label: Text(lang.translate('btn_auto_detect')), // TRANSLATED
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: Colors.grey[300],
+                          disabledForegroundColor: Colors.grey[600],
+                          elevation: 0, 
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4.0), // Matches TextField OutlineInputBorder
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ],
               ),
+              // Moved Helper Text here to align with the column instead of distorting the row height
+              Padding(
+                padding: const EdgeInsets.only(top: 6.0, left: 2.0),
+                child: Text(
+                  lang.translate('hint_dots'), // TRANSLATED
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                ),
+              ),
               
               Padding(
-                padding: const EdgeInsets.only(top: 8.0),
+                padding: const EdgeInsets.only(top: 4.0), 
                 child: Text(
                   _detectedModelInfo, 
                   style: TextStyle(

@@ -16,9 +16,9 @@ class AppTranslations {
       'search_devices': 'Search for Devices',
       
       // Section 2
-      'sec_native': '2. Native / System Print',
+      'sec_native': '2. Print Test',
       'native_desc': 'Uses Android/iOS System Print Service.\nPreview matches configured paper width.',
-      'test_system_button': 'TEST SYSTEM PRINT',
+      'test_system_button': 'TEST PRINT',
       
       // Section 3
       'sec_config': '3. Configuration',
@@ -73,7 +73,6 @@ class AppTranslations {
       'btn_80mm': '80mm',
       'lbl_large': 'Large/POS',
       'lbl_advanced': 'Advanced Settings:',
-      'lbl_dots': 'Dots',
       'hint_dots': '384 = 58mm, 576 = 80mm',
       'btn_auto_detect': 'AUTO\nDETECT',
       'lbl_visual': 'Visual Preview:',
@@ -101,7 +100,7 @@ class AppTranslations {
       'lbl_version': 'Version',
       'lbl_developer': 'Developer',
       'txt_copyright': '© 2025 LHDNM Copyrights',
-      'app_plugin_name': 'MyInvois e-Pos Plugin',
+      'app_plugin_name': 'MyInvois e-Pos Printer',
       'val_lhdnm_team': 'LHDNM Team',
       'lbl_build': 'Build',
 
@@ -116,7 +115,7 @@ class AppTranslations {
       'test_print_instruction': "If 'Left' and 'Right' are cut off, reduce dots (e.g., 370). If there is whitespace, increase dots.",
     },
     'ms': {
-      'app_title': 'Pencetak e-Pos MyInvois',
+      'app_title': 'Pencetak MyInvois e-Pos',
       'lang_button': 'ENG', 
 
       // Section 1
@@ -125,15 +124,15 @@ class AppTranslations {
       'unknown_device': 'Peranti Tidak Diketahui',
       'working': 'Sedang proses...',
       'disconnect': 'Putus Sambungan',
-      'connect_selected': 'Sambung Dipilih',
+      'connect_selected': 'Pilih Sambungan',
       'connected_to': 'Disambungkan ke',
       'connected_other': 'Disambungkan ke peranti lain',
-      'search_devices': 'Cari Peranti',
+      'search_devices': 'Carian Peranti',
 
       // Section 2
-      'sec_native': '2. Cetakan Sistem / Asli',
-      'native_desc': 'Menggunakan Servis Cetak Android/iOS.\nPratonton ikut lebar kertas yang ditetapkan.',
-      'test_system_button': 'UJI CETAKAN SISTEM',
+      'sec_native': '2. Ujian Cetakan',
+      'native_desc': 'Menggunakan Servis Cetak Android/iOS.\nMenyemak paparan mengikut lebar kertas yang ditetapkan.',
+      'test_system_button': 'UJI CETAKAN',
 
       // Section 3
       'sec_config': '3. Konfigurasi',
@@ -156,8 +155,8 @@ class AppTranslations {
       'note_android': 'Nota: Android mencari Bluetooth Klasik.',
       'status_scanning': 'Sedang mengimbas...',
       'status_no_devices': 'Tiada peranti dijumpai',
-      'btn_paired': 'BERPASANGAN',
-      'btn_pair': 'PASANG',
+      'btn_paired': 'DISAMBUNG',
+      'btn_pair': 'SAMBUNG',
       'btn_connect': 'SAMBUNG',
       'msg_connecting': 'Menyambung ke',
       'msg_pair_fail': 'Gagal berpasangan.',
@@ -188,10 +187,9 @@ class AppTranslations {
       'btn_80mm': '80mm',
       'lbl_large': 'Besar/POS',
       'lbl_advanced': 'Tetapan Lanjutan:',
-      'lbl_dots': 'Dots',
       'hint_dots': '384 = 58mm, 576 = 80mm',
       'btn_auto_detect': 'AUTO\nKESAN',
-      'lbl_visual': 'Pratonton Visual:',
+      'lbl_visual': 'Semakan Paparan:',
       'btn_save_settings': 'SIMPAN TETAPAN',
       'lbl_active_area': 'Kawasan Aktif',
 
@@ -212,16 +210,16 @@ class AppTranslations {
       // Settings page
       'title_settings': 'Tetapan & Info',
       'sec_language': 'Bahasa',
-      'sec_about': 'Tentang',
+      'sec_about': 'Perihal',
       'lbl_version': 'Versi',
       'lbl_developer': 'Pembangun',
       'txt_copyright': '© 2025 Hak Cipta LHDNM',
-      'app_plugin_name': 'Plugin e-Pos MyInvois',
+      'app_plugin_name': 'Pencetak MyInvois e-Pos',
       'val_lhdnm_team': 'Pasukan LHDNM',
       'lbl_build': 'Binaan',
 
       // PDF Test Print
-      'test_print_title': 'Cetakan Ujian e-Pos MyInvois',
+      'test_print_title': 'Cetakan Ujian MyInvois e-Pos',
       'test_print_dpi': 'DPI: ',
       'test_print_config': 'Konfig: ',
       'test_print_dots_suffix': ' titik (58mm)',
