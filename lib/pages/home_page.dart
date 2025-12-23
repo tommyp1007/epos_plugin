@@ -213,7 +213,7 @@ class _HomePageState extends State<HomePage> {
       final prefs = await SharedPreferences.getInstance();
       final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
       const int _selectedDpi = 203;
-      // Example: Set width to 58mm or 80mm based on config, using 79.0 as base from original code.
+      // Using 79.0mm gives a tiny buffer on standard 80mm paper to prevent clipping
       const double paperWidthMm = 79.0;
 
       final receiptFormat = PdfPageFormat(
@@ -229,7 +229,6 @@ class _HomePageState extends State<HomePage> {
           final doc = pw.Document();
 
           // 1. Load the image asset
-          // IMPORTANT: 'assets/images/print_test.png' must be in pubspec.yaml
           final logoImage = pw.MemoryImage(
             (await rootBundle.load('assets/images/print_test.png')).buffer.asUint8List(),
           );
@@ -237,54 +236,59 @@ class _HomePageState extends State<HomePage> {
           doc.addPage(pw.Page(
               pageFormat: receiptFormat,
               build: (pw.Context context) {
-                return pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.center,
-                  children: [
-                    // 2. Add Logo Image at top
-                    pw.Center(
-                      child: pw.Image(
-                        logoImage,
-                        width: 100, // Adjust width as needed
-                        height: 100, // Adjust height as needed
-                        fit: pw.BoxFit.contain,
+                // WRAP WITH ALIGN to force centering on the paper
+                return pw.Align(
+                  alignment: pw.Alignment.topCenter,
+                  child: pw.Column(
+                    mainAxisSize: pw.MainAxisSize.min,
+                    crossAxisAlignment: pw.CrossAxisAlignment.center,
+                    children: [
+                      // 2. Add Logo Image at top
+                      pw.Center(
+                        child: pw.Image(
+                          logoImage,
+                          width: 100,
+                          height: 100,
+                          fit: pw.BoxFit.contain,
+                        ),
                       ),
-                    ),
-                    pw.SizedBox(height: 10), // Space between logo and title
+                      pw.SizedBox(height: 10),
 
-                    pw.Text(
-                      lang.translate('test_print_title'), // "e-Pos System Test Print"
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
-                      textAlign: pw.TextAlign.center,
-                    ),
-                    pw.SizedBox(height: 5),
-                    pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
-                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), // "Config: ... dots (58mm)"
-                    pw.SizedBox(height: 10),
-                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                    pw.SizedBox(height: 5),
-                    pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Text(lang.translate('test_print_left')),   // "<< Left"
-                          pw.Text(lang.translate('test_print_center')), // "Center"
-                          pw.Text(lang.translate('test_print_right')),  // "Right >>"
-                        ]
-                    ),
-                    pw.SizedBox(height: 5),
-                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                    pw.SizedBox(height: 10),
-                    pw.BarcodeWidget(
-                      barcode: pw.Barcode.qrCode(),
-                      data: 'e-Pos System Test',
-                      width: 100,
-                      height: 100,
-                    ),
-                    pw.SizedBox(height: 10),
-                    pw.Text(
-                      lang.translate('test_print_instruction'), // "If 'Left' and 'Right' are cut off..."
-                      textAlign: pw.TextAlign.center
-                    ),
-                  ],
+                      pw.Text(
+                        lang.translate('test_print_title'),
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
+                        textAlign: pw.TextAlign.center,
+                      ),
+                      pw.SizedBox(height: 5),
+                      pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), 
+                      pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), 
+                      pw.SizedBox(height: 10),
+                      pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                      pw.SizedBox(height: 5),
+                      pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text(lang.translate('test_print_left')),   
+                            pw.Text(lang.translate('test_print_center')), 
+                            pw.Text(lang.translate('test_print_right')),  
+                          ]
+                      ),
+                      pw.SizedBox(height: 5),
+                      pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                      pw.SizedBox(height: 10),
+                      pw.BarcodeWidget(
+                        barcode: pw.Barcode.qrCode(),
+                        data: 'e-Pos System Test',
+                        width: 100,
+                        height: 100,
+                      ),
+                      pw.SizedBox(height: 10),
+                      pw.Text(
+                        lang.translate('test_print_instruction'), 
+                        textAlign: pw.TextAlign.center
+                      ),
+                    ],
+                  ),
                 );
               }
           ));
