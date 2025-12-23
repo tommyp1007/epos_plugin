@@ -1,15 +1,26 @@
 import 'dart:async';
 import 'dart:io'; // Required for Platform checks
+
 import 'package:flutter/material.dart';
 import 'package:share_handler/share_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:provider/provider.dart'; // 1. IMPORT PROVIDER
+
+import 'services/language_service.dart'; // 2. IMPORT LANGUAGE SERVICE
 import 'pages/home_page.dart';
 
 void main() {
   // Required for platform channels (ShareHandler, SharedPreferences, DeviceInfo)
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  
+  // 3. WRAP APP IN PROVIDER
+  runApp(
+    ChangeNotifierProvider(
+      create: (context) => LanguageService(),
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatefulWidget {
@@ -149,8 +160,12 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
+    // 4. LISTEN TO LANGUAGE CHANGES
+    final lang = Provider.of<LanguageService>(context);
+
     return MaterialApp(
-      title: 'e-Pos Printer Services',
+      // 5. USE TRANSLATED TITLE
+      title: lang.translate('app_title'), 
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,

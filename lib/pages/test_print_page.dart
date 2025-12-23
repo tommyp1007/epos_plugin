@@ -4,8 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart'; // IMPORT PROVIDER
 
 import '../services/bluetooth_print_service.dart';
+import '../services/language_service.dart'; // IMPORT LANGUAGE SERVICE
 import '../utils/raw_commands.dart';
 
 class TestPrintPage extends StatefulWidget {
@@ -40,9 +42,6 @@ class _TestPrintPageState extends State<TestPrintPage> {
 
   Future<void> _initBluetooth() async {
     // 1. Setup Listeners
-    // Note: We use the direct stream from FlutterBluePlus for the UI list 
-    // to ensure we get the latest raw data, or you can stick to _service.scanResults 
-    // if your service does special filtering.
     _scanSubscription = _service.scanResults.listen((results) {
       if (mounted) {
         setState(() {
@@ -68,6 +67,8 @@ class _TestPrintPageState extends State<TestPrintPage> {
   }
 
   Future<void> _checkPermissions() async {
+    final lang = Provider.of<LanguageService>(context, listen: false); // Provider for SnackBar
+
     if (Platform.isAndroid) {
       // Android 12+ (API 31+)
       if (await _isAndroid12OrHigher()) {
@@ -85,7 +86,7 @@ class _TestPrintPageState extends State<TestPrintPage> {
         
         // Optional: Check if Location Service (GPS) is actually on
         if (!await Permission.location.serviceStatus.isEnabled) {
-           if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enable Location/GPS for Bluetooth scanning.")));
+           if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lang.translate('msg_enable_gps')))); // TRANSLATED
         }
       }
     } else if (Platform.isIOS) {
@@ -97,53 +98,46 @@ class _TestPrintPageState extends State<TestPrintPage> {
 
   // Helper to detect Android version
   Future<bool> _isAndroid12OrHigher() async {
-    // In Dart 2.18+ / Flutter 3.3+, standard libraries don't expose SDK_INT easily without device_info_plus.
-    // If you don't have device_info_plus, we assume permission_handler handles the fallback, 
-    // but requesting 'bluetoothScan' on old Android simply returns granted/restricted instantly.
-    // So simply requesting both sets (as done above) is usually safe or you can use device_info_plus.
-    return true; // Simplified for this snippet; permission_handler handles version checks internally mostly.
+    return true; // Simplified for this snippet
   }
 
   void _startScan() async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
     // Check if Bluetooth is On
     if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please turn on Bluetooth")));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lang.translate('msg_bt_on')))); // REUSING KEY
       return;
     }
 
     try {
-      // Use the service start scan
       _service.startScan();
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Start Scan Error: $e")));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${lang.translate('msg_start_scan_error')} $e"))); // TRANSLATED
     }
   }
 
   void _connectToDevice(BluetoothDevice device) async {
     await _service.stopScan();
+    final lang = Provider.of<LanguageService>(context, listen: false);
     
-    if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Connecting to ${device.platformName}...")));
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${lang.translate('msg_connecting')} ${device.platformName}..."))); // REUSING KEY
 
     try {
-      // Note: iOS uses UUIDs, Android uses MAC addresses. 
-      // flutter_blue_plus handles this via remoteId.
       bool success = await _service.connect(device);
       
       if (success && mounted) {
         setState(() => _connectedDeviceName = device.platformName.isNotEmpty ? device.platformName : device.remoteId.str);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Connected successfully!")));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lang.translate('msg_connected_success')))); // TRANSLATED
       } else {
-        if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Connection failed.")));
+        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lang.translate('msg_conn_fail')))); // REUSING KEY
       }
     } catch (e) {
-       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Connection Error: $e")));
+       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${lang.translate('msg_error_conn')} $e"))); // REUSING KEY
     }
   }
 
   void _disconnect() async {
-    // Assuming your service has a disconnect method, or you access the device directly
-    // If _service doesn't expose disconnect, you might need to add it or store the 'device' object globally.
-    // For now, we just clear the UI state as a visual representation.
     setState(() {
       _connectedDeviceName = null;
     });
@@ -151,26 +145,31 @@ class _TestPrintPageState extends State<TestPrintPage> {
 
   void _printTest() async {
     if (_connectedDeviceName == null) return;
+    final lang = Provider.of<LanguageService>(context, listen: false);
     
     try {
       List<int> bytes = [];
       bytes.addAll(RawCommands.reset());
       bytes.addAll("e-Pos BLE Service Test\n".codeUnits);
       bytes.addAll("----------------\n".codeUnits);
-      bytes.addAll("Works on iOS & Android!\n\n".codeUnits);
+      // TRANSLATED TEST CONTENT
+      bytes.addAll(lang.translate('test_print_content').codeUnits); 
       bytes.addAll("Platform: ${Platform.isAndroid ? 'Android' : 'iOS'}\n\n\n".codeUnits);
       bytes.addAll(RawCommands.feed(3));
 
       await _service.sendBytes(bytes);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Print Error: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("${lang.translate('msg_print_error')} $e"))); // TRANSLATED
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // 1. LISTEN TO LANGUAGE CHANGES
+    final lang = Provider.of<LanguageService>(context);
+
     return Scaffold(
-      appBar: AppBar(title: const Text("BLE Printer Manager")),
+      appBar: AppBar(title: Text(lang.translate('title_ble_manager'))), // TRANSLATED
       body: Column(
         children: [
           // Connection Status Area
@@ -187,7 +186,9 @@ class _TestPrintPageState extends State<TestPrintPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            _connectedDeviceName != null ? "Connected" : "Not Connected",
+                            _connectedDeviceName != null 
+                                ? lang.translate('status_connected')       // TRANSLATED
+                                : lang.translate('status_not_connected'),  // TRANSLATED
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: _connectedDeviceName != null ? Colors.green[800] : Colors.red,
@@ -203,13 +204,13 @@ class _TestPrintPageState extends State<TestPrintPage> {
                         children: [
                            ElevatedButton(
                             onPressed: _printTest, 
-                            child: const Text("TEST PRINT")
+                            child: Text(lang.translate('btn_test_print')) // TRANSLATED
                           ),
                           const SizedBox(width: 8),
                           IconButton(
                             icon: const Icon(Icons.close, color: Colors.red),
                             onPressed: _disconnect,
-                            tooltip: "Disconnect",
+                            tooltip: lang.translate('disconnect'), // REUSING KEY
                           )
                         ],
                       )
@@ -228,7 +229,7 @@ class _TestPrintPageState extends State<TestPrintPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.refresh), 
-                label: const Text("Scan Again"), 
+                label: Text(lang.translate('btn_scan_again')), // TRANSLATED
                 onPressed: _startScan
               ),
             ),
@@ -238,7 +239,9 @@ class _TestPrintPageState extends State<TestPrintPage> {
             child: _scanResults.isEmpty
                 ? Center(
                     child: Text(
-                      _isScanning ? "Scanning for BLE devices..." : "No BLE devices found.\nMake sure printer is ON and supports BLE.",
+                      _isScanning 
+                          ? lang.translate('msg_scanning_ble')   // TRANSLATED
+                          : lang.translate('msg_no_ble_found'),  // TRANSLATED
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.grey),
                     ),

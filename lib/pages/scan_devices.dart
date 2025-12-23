@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // Required for iOS
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart'; // IMPORT PROVIDER
 
 import '../services/printer_service.dart';
+import '../services/language_service.dart'; // IMPORT LANGUAGE SERVICE
 
 /// A simple wrapper to unify Android (Classic) and iOS (BLE) results
 class UniversalBluetoothDevice {
@@ -32,14 +34,14 @@ class ScanDevicesPage extends StatefulWidget {
 
 class _ScanDevicesPageState extends State<ScanDevicesPage> {
   final PrinterService _printerService = PrinterService();
-  
+
   // Unified list for display
   List<UniversalBluetoothDevice> _scanResults = [];
   bool _isScanning = false;
 
   // Android specific subscription
   StreamSubscription<BluetoothDiscoveryResult>? _androidScanSubscription;
-  
+
   // iOS specific subscription
   StreamSubscription<List<ScanResult>>? _iosScanSubscription;
 
@@ -74,7 +76,11 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
   Future<void> _startScan() async {
     if (_isScanning) return;
-    
+
+    // Helper to get lang inside async method without context issues
+    // Note: We use listen: false here because we are in a logic function, not build
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
     // Reset list and state
     setState(() {
       _scanResults = [];
@@ -114,9 +120,9 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
         // --- iOS LOGIC (BLE) ---
         // Check if Bluetooth is On
         if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
-            _showSnackBar("Please turn on Bluetooth");
-            _stopScan();
-            return;
+          _showSnackBar(lang.translate('msg_bt_on')); // TRANSLATED
+          _stopScan();
+          return;
         }
 
         await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
@@ -127,13 +133,13 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
               _scanResults = results
                   .where((r) => r.device.platformName.isNotEmpty) // BLE devices often have empty names
                   .map((r) => UniversalBluetoothDevice(
-                        name: r.device.platformName,
-                        address: r.device.remoteId.str, // iOS uses UUID, not MAC
-                        rssi: r.rssi,
-                        isBonded: false, // iOS handles bonding internally
-                      ))
+                name: r.device.platformName,
+                address: r.device.remoteId.str, // iOS uses UUID, not MAC
+                rssi: r.rssi,
+                isBonded: false, // iOS handles bonding internally
+              ))
                   .toList();
-               _scanResults.sort((a, b) => b.rssi.compareTo(a.rssi));
+              _scanResults.sort((a, b) => b.rssi.compareTo(a.rssi));
             });
           }
         });
@@ -144,7 +150,7 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
       if (_isScanning) _stopScan();
 
     } catch (e) {
-      if (mounted) _showSnackBar("Scan Error: $e");
+      if (mounted) _showSnackBar("${lang.translate('msg_scan_error')} $e"); // TRANSLATED
       _stopScan();
     }
   }
@@ -157,14 +163,15 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
       await _iosScanSubscription?.cancel();
       await FlutterBluePlus.stopScan();
     }
-    
+
     if (mounted) setState(() => _isScanning = false);
   }
 
   Future<void> _pairAndConnect(UniversalBluetoothDevice device) async {
     await _stopScan();
-    
-    _showSnackBar("Connecting to ${device.name}...");
+    final lang = Provider.of<LanguageService>(context, listen: false); // Provider access
+
+    _showSnackBar("${lang.translate('msg_connecting')} ${device.name}..."); // TRANSLATED
 
     try {
       bool success = false;
@@ -174,14 +181,13 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
         if (!device.isBonded) {
           bool? bonded = await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
           if (bonded != true) {
-            _showSnackBar("Pairing failed.");
+            _showSnackBar(lang.translate('msg_pair_fail')); // TRANSLATED
             return;
           }
         }
         success = await _printerService.connect(device.address);
       } else if (Platform.isIOS) {
         // iOS: Connect directly (Bonding/Pairing is handled by OS dialogs if needed)
-        // Note: printerService must support connecting via UUID for iOS
         success = await _printerService.connect(device.address);
       }
 
@@ -189,7 +195,7 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
         if (success) {
           Navigator.pop(context, device.address); // Return the ID/MAC
         } else {
-          _showSnackBar("Connection failed.");
+          _showSnackBar(lang.translate('msg_conn_fail')); // TRANSLATED
         }
       }
     } catch (e) {
@@ -203,8 +209,11 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. WATCH FOR LANGUAGE CHANGES
+    final lang = Provider.of<LanguageService>(context);
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Scan for Printers")),
+      appBar: AppBar(title: Text(lang.translate('title_scan'))), // TRANSLATED
       body: Column(
         children: [
           Container(
@@ -215,22 +224,25 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
                 if (_isScanning) ...[
                   const LinearProgressIndicator(),
                   const SizedBox(height: 10),
-                  OutlinedButton(onPressed: _stopScan, child: const Text("STOP SCAN"))
+                  OutlinedButton(
+                      onPressed: _stopScan,
+                      child: Text(lang.translate('btn_stop_scan')) // TRANSLATED
+                  )
                 ] else ...[
                   SizedBox(
-                    width: double.infinity, 
+                    width: double.infinity,
                     child: ElevatedButton.icon(
-                      icon: const Icon(Icons.bluetooth_searching), 
-                      label: const Text("SCAN DEVICES"), 
-                      onPressed: _startScan
-                    )
+                        icon: const Icon(Icons.bluetooth_searching),
+                        label: Text(lang.translate('btn_start_scan')), // TRANSLATED
+                        onPressed: _startScan
+                    ),
                   ),
                 ],
                 const SizedBox(height: 5),
                 Text(
-                  Platform.isIOS 
-                      ? "Note: iOS searches for BLE Printers." 
-                      : "Note: Android searches for Classic Bluetooth.",
+                  Platform.isIOS
+                      ? lang.translate('note_ios')     // TRANSLATED
+                      : lang.translate('note_android'),// TRANSLATED
                   style: const TextStyle(fontSize: 10, color: Colors.grey),
                 )
               ],
@@ -239,32 +251,37 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
           Expanded(
             child: _scanResults.isEmpty
                 ? Center(
-                    child: Text(_isScanning ? "Scanning..." : "No devices found"),
-                  )
+              child: Text(_isScanning
+                  ? lang.translate('status_scanning')   // TRANSLATED
+                  : lang.translate('status_no_devices') // TRANSLATED
+              ),
+            )
                 : ListView.builder(
-                    itemCount: _scanResults.length,
-                    itemBuilder: (context, index) {
-                      final device = _scanResults[index];
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.print, color: Colors.blueGrey),
-                          title: Text(device.name),
-                          subtitle: Text("${device.address}\nSignal: ${device.rssi}"),
-                          trailing: ElevatedButton(
-                            // On iOS we just say "Connect", on Android we distinguish Pair vs Paired
-                            onPressed: (Platform.isAndroid && device.isBonded) 
-                                ? null 
-                                : () => _pairAndConnect(device),
-                            child: Text(
-                              Platform.isAndroid 
-                                  ? (device.isBonded ? "PAIRED" : "PAIR") 
-                                  : "CONNECT"
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+              itemCount: _scanResults.length,
+              itemBuilder: (context, index) {
+                final device = _scanResults[index];
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.print, color: Colors.blueGrey),
+                    title: Text(device.name),
+                    subtitle: Text("${device.address}\n${lang.translate('signal')} ${device.rssi}"), // TRANSLATED
+                    trailing: ElevatedButton(
+                      // On iOS we just say "Connect", on Android we distinguish Pair vs Paired
+                      onPressed: (Platform.isAndroid && device.isBonded)
+                          ? null
+                          : () => _pairAndConnect(device),
+                      child: Text(
+                          Platform.isAndroid
+                              ? (device.isBonded
+                                ? lang.translate('btn_paired') // TRANSLATED
+                                : lang.translate('btn_pair'))  // TRANSLATED
+                              : lang.translate('btn_connect')    // TRANSLATED
+                      ),
+                    ),
                   ),
+                );
+              },
+            ),
           ),
         ],
       ),

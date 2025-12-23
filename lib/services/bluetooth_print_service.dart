@@ -21,13 +21,9 @@ class BluetoothPrintService {
   // --- 1. Request Permissions (Updated for Android 12+ & iOS) ---
   Future<bool> requestPermissions() async {
     if (Platform.isAndroid) {
-      // Check for Android 12+ (SDK 31+)
-      // Note: We assume the app targets SDK 31+. 
+      // Android 12+ (SDK 31+) permissions
       // If permission_handler detects API < 31, requesting 'bluetoothScan' usually returns restricted/granted automatically.
       
-      // We request all potential permissions. 
-      // On Android 12+, 'location' is not strictly needed for BLE if 'neverForLocation' is in manifest,
-      // but 'bluetoothScan' and 'bluetoothConnect' are mandatory.
       Map<Permission, PermissionStatus> statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
@@ -55,6 +51,7 @@ class BluetoothPrintService {
   Future<void> startScan() async {
     // Check if Bluetooth is actually On before scanning to avoid errors
     if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      // The UI will catch this Exception and display "Error: Bluetooth is off"
       throw Exception("Bluetooth is off");
     }
     // Timeout ensures we don't drain battery
@@ -93,7 +90,6 @@ class BluetoothPrintService {
           if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
             _writeCharacteristic = characteristic;
             // We found a candidate. Most printers only have one writable characteristic.
-            // If specific UUIDs are needed, check: characteristic.uuid.toString().contains("...")
             return true;
           }
         }
@@ -156,8 +152,6 @@ class BluetoothPrintService {
         await Future.delayed(Duration(milliseconds: delay)); 
       } catch (e) {
         print("Error writing chunk: $e");
-        // If 'withoutResponse' failed, try 'withResponse' as fallback?
-        // Usually better to just throw so UI knows printing failed.
         throw e;
       }
     }

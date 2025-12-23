@@ -5,14 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart'; 
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../services/printer_service.dart';
+import '../services/language_service.dart'; 
 import 'width_settings.dart';
 import 'scan_devices.dart';
+import 'app_info.dart'; 
 
 class HomePage extends StatefulWidget {
   final String? sharedFilePath;
@@ -38,36 +41,26 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _checkPermissions() async {
-    // 1. Android & Huawei (Android-based) Permissions
     if (Platform.isAndroid) {
-      // requesting all relevant permissions for both old (Location) 
-      // and new (Scan/Connect) Android versions.
       await [
         Permission.bluetooth,
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-        Permission.location, // Critical for scanning on older Android & Huawei
+        Permission.location,
       ].request();
-    } 
-    // 2. Apple iOS Permissions
-    else if (Platform.isIOS) {
-      // iOS requires Bluetooth permission explicitly
+    } else if (Platform.isIOS) {
       await [
         Permission.bluetooth,
       ].request();
     }
-    
-    // After permissions are handled, load devices
     _loadBondedDevices();
   }
 
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
     try {
-      // Note: "Bonded" devices are primarily an Android concept. 
-      // On iOS, this list might be empty, requiring the user to use "Search for Devices".
       List<BluetoothInfo> devices = await _printerService.getBondedDevices();
-      
+
       if (mounted) {
         setState(() {
           _pairedDevices = devices;
@@ -87,9 +80,7 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } catch (e) {
-      // On iOS, getBondedDevices might throw an UnimplementedError or PlatformException.
-      // We catch it silently here so the app doesn't crash, allowing the user to use "Search".
-      debugPrint("Error loading bonded devices (Normal on iOS): $e");
+      debugPrint("Error loading bonded devices: $e");
     } finally {
       if (mounted) {
         setState(() => _isLoadingPaired = false);
@@ -97,9 +88,55 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- FULL RESET FUNCTION ---
+  Future<void> _handleFullRefresh() async {
+    setState(() => _isLoadingPaired = true);
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
+    try {
+      // 1. Disconnect Printer
+      await _printerService.disconnect();
+
+      // 2. Clear Preferences (EXCEPT LANGUAGE)
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('selected_printer_mac'); // Clear connection memory
+      await prefs.remove('printer_width_dots');   // Clear Section 3 Config
+      await prefs.remove('printer_dpi');          // Clear Section 3 Config
+      await prefs.remove('printer_width_mode');   // Clear Auto-detect Config
+      
+      // Note: We do NOT remove 'language_code', so translation stays.
+
+      // 3. Reset UI State
+      if (mounted) {
+        setState(() {
+          _connectedMac = null;
+          _selectedPairedDevice = null;
+          _isConnecting = false;
+        });
+      }
+
+      // 4. Reload Paired Devices
+      await _loadBondedDevices();
+
+      // 5. Show Feedback
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(lang.translate('msg_reset_defaults')))
+        );
+      }
+
+    } catch (e) {
+      debugPrint("Error refreshing: $e");
+    } finally {
+      if (mounted) setState(() => _isLoadingPaired = false);
+    }
+  }
+
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
-    
+
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
     setState(() => _isConnecting = true);
 
     String selectedMac = _selectedPairedDevice!.macAdress;
@@ -109,50 +146,48 @@ class _HomePageState extends State<HomePage> {
     try {
       if (isCurrentlyConnectedToSelection) {
         await _printerService.disconnect();
-        // Remove the preference so Native Service stops filtering for this specific device
-        await prefs.remove('selected_printer_mac'); 
+        await prefs.remove('selected_printer_mac');
 
         if (mounted) {
           setState(() {
             _connectedMac = null;
             _isConnecting = false;
           });
-          _showSnackBar("Disconnected.");
+          _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
         if (_connectedMac != null) {
-           await _printerService.disconnect();
-           await Future.delayed(const Duration(milliseconds: 500)); 
+          await _printerService.disconnect();
+          await Future.delayed(const Duration(milliseconds: 500));
         }
 
         bool success = await _printerService.connect(selectedMac);
-        
+
         if (success) {
-           // SAVE MAC ADDRESS: This allows Kotlin/Native to know which printer to select by default
-           await prefs.setString('selected_printer_mac', selectedMac); 
-           
-           if (mounted) {
-             setState(() {
-               _connectedMac = selectedMac;
-               _isConnecting = false;
-             });
-             _showSnackBar("Connected to ${_selectedPairedDevice!.name}");
-           }
+          await prefs.setString('selected_printer_mac', selectedMac);
+
+          if (mounted) {
+            setState(() {
+              _connectedMac = selectedMac;
+              _isConnecting = false;
+            });
+            _showSnackBar("${lang.translate('msg_connected')} ${_selectedPairedDevice!.name}");
+          }
         } else {
-           await prefs.remove('selected_printer_mac');
-           if (mounted) {
-             setState(() {
-               _connectedMac = null; 
-               _isConnecting = false;
-             });
-             _showSnackBar("Connection failed. Is the printer ON?");
-           }
+          await prefs.remove('selected_printer_mac');
+          if (mounted) {
+            setState(() {
+              _connectedMac = null;
+              _isConnecting = false;
+            });
+            _showSnackBar(lang.translate('msg_failed'));
+          }
         }
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isConnecting = false);
-        _showSnackBar("Error during connection: $e");
+        _showSnackBar("${lang.translate('msg_error_conn')} $e");
       }
     }
   }
@@ -169,74 +204,78 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- 3. Native Print Logic (Updated) ---
   Future<void> _testNativePrintService() async {
-    try {
-      // Fetch current configuration for display on receipt
-      final prefs = await SharedPreferences.getInstance();
-      final int inputDots = prefs.getInt('printer_width_dots') ?? 384; // Default to 384 (58mm standard)
-      const int _selectedDpi = 203; // Standard Thermal DPI
+    final lang = Provider.of<LanguageService>(context, listen: false);
+    
+    // Get fonts to support multilingual text if needed (optional but good practice)
+    // For standard PDF generation, ensure the font supports special characters if you use them.
 
-      // We force 80mm layout here so the Android Preview is never cropped.
-      // The Service (Kotlin) will scale it down if the user settings = 58mm.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
+      const int _selectedDpi = 203;
       const double paperWidthMm = 79.0;
 
-      // Define page format
       final receiptFormat = PdfPageFormat(
-         paperWidthMm * PdfPageFormat.mm, 
-         double.infinity, // Continuous roll
-         marginAll: 0 
+          paperWidthMm * PdfPageFormat.mm,
+          double.infinity,
+          marginAll: 0
       );
 
       await Printing.layoutPdf(
-        format: receiptFormat, 
-        dynamicLayout: false, 
-
+        format: receiptFormat,
+        dynamicLayout: false,
         onLayout: (PdfPageFormat format) async {
           final doc = pw.Document();
-          
+
           doc.addPage(pw.Page(
-            pageFormat: receiptFormat,
-            build: (pw.Context context) {
-              return pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.center,
-                children: [
-                  pw.Text("e-Pos System Test Print", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
-                  pw.SizedBox(height: 5),
-                  pw.Text("DPI: $_selectedDpi"),
-                  pw.Text("Config: $inputDots dots (58mm)"),
-                  pw.SizedBox(height: 10),
-                  pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                  pw.SizedBox(height: 5),
-                  pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text("<< Left"),
-                      pw.Text("Center"),
-                      pw.Text("Right >>"),
-                    ]
-                  ),
-                  pw.SizedBox(height: 5),
-                  pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                   pw.SizedBox(height: 10),
-                   pw.BarcodeWidget(
-                     barcode: pw.Barcode.qrCode(),
-                     data: 'e-Pos System Test',
-                     width: 100,
-                     height: 100,
-                   ),
-                   pw.SizedBox(height: 10),
-                   pw.Text("If 'Left' and 'Right' are cut off, reduce dots (e.g., 370). If there is whitespace, increase dots."),
-                ]
-              );
-            }
+              pageFormat: receiptFormat,
+              build: (pw.Context context) {
+                return pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    pw.Text(
+                      lang.translate('test_print_title'), // "e-Pos System Test Print"
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)
+                    ),
+                    pw.SizedBox(height: 5),
+                    pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
+                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), // "Config: ... dots (58mm)"
+                    pw.SizedBox(height: 10),
+                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                    pw.SizedBox(height: 5),
+                    pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text(lang.translate('test_print_left')),   // "<< Left"
+                          pw.Text(lang.translate('test_print_center')), // "Center"
+                          pw.Text(lang.translate('test_print_right')),  // "Right >>"
+                        ]
+                    ),
+                    pw.SizedBox(height: 5),
+                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                    pw.SizedBox(height: 10),
+                    pw.BarcodeWidget(
+                      barcode: pw.Barcode.qrCode(),
+                      data: 'e-Pos System Test',
+                      width: 100,
+                      height: 100,
+                    ),
+                    pw.SizedBox(height: 10),
+                    pw.Text(
+                      lang.translate('test_print_instruction'), // "If 'Left' and 'Right' are cut off..."
+                      textAlign: pw.TextAlign.center
+                    ),
+                  ],
+                );
+              }
           ));
           return doc.save();
         },
         name: 'ePos_Receipt_Test',
       );
     } catch (e) {
-      _showSnackBar("Error launching Native Print: $e");
+      _showSnackBar("${lang.translate('msg_error_launch')} $e");
     }
   }
 
@@ -249,45 +288,60 @@ class _HomePageState extends State<HomePage> {
     String deviceName = "";
     if (_connectedMac != null && _selectedPairedDevice != null) {
       if (_selectedPairedDevice!.macAdress == _connectedMac) {
-          deviceName = _selectedPairedDevice!.name;
+        deviceName = _selectedPairedDevice!.name;
       }
     }
     Navigator.push(
-      context, 
-      MaterialPageRoute(
-        builder: (_) => WidthSettings(connectedDeviceName: deviceName)
-      )
+        context,
+        MaterialPageRoute(
+            builder: (_) => AppInfoPage(connectedDeviceName: deviceName)
+        )
+    );
+  }
+
+  void _openPrinterConfig() {
+      String deviceName = "";
+      if (_connectedMac != null && _selectedPairedDevice != null) {
+        if (_selectedPairedDevice!.macAdress == _connectedMac) {
+          deviceName = _selectedPairedDevice!.name;
+        }
+      }
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => WidthSettings(connectedDeviceName: deviceName)
+        )
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final lang = Provider.of<LanguageService>(context);
+
     bool isSelectedDeviceConnected = (_selectedPairedDevice != null && _selectedPairedDevice!.macAdress == _connectedMac);
 
     return Scaffold(
       appBar: AppBar(
-        // ------------------ UPDATED SECTION ------------------
         title: Row(
-          mainAxisSize: MainAxisSize.min, // Keeps the title content compact
+          mainAxisSize: MainAxisSize.min,
           children: [
             Image.asset(
-              'assets/images/menu_icon.png', // Looks for file in assets/images/
-              height: 24, // Adjust icon height
+              'assets/images/menu_icon.png',
+              height: 24,
               fit: BoxFit.contain,
             ),
-            const SizedBox(width: 8), // Spacing between icon and text
-            const Text(
-              "MyInvois e-Pos Printer",
-              style: TextStyle(
-                fontSize: 16, // Smaller font size
+            const SizedBox(width: 8),
+            Text(
+              lang.translate('app_title'),
+              style: const TextStyle(
+                fontSize: 16,
               ),
             ),
           ],
         ),
-        // -----------------------------------------------------
         actions: [
           IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: () => _loadBondedDevices())
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _handleFullRefresh) 
         ],
       ),
       body: SingleChildScrollView(
@@ -296,7 +350,7 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text("1. Connection Manager", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(lang.translate('sec_connection'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12.0),
@@ -304,69 +358,72 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       DropdownButton<BluetoothInfo>(
                         isExpanded: true,
-                        hint: const Text("Select a paired printer"),
-                        // Ensure the value matches exactly the object in the list
-                        value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null && _pairedDevices.contains(_selectedPairedDevice)) 
-                            ? _selectedPairedDevice 
+                        hint: Text(lang.translate('select_hint')),
+                        value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null && _pairedDevices.contains(_selectedPairedDevice))
+                            ? _selectedPairedDevice
                             : null,
                         items: _pairedDevices.map((device) {
-                          return DropdownMenuItem(value: device, child: Text(device.name.isEmpty ? "Unknown Device" : device.name));
+                          return DropdownMenuItem(value: device, child: Text(device.name.isEmpty ? lang.translate('unknown_device') : device.name));
                         }).toList(),
                         onChanged: (device) {
-                          setState(() { 
-                            _selectedPairedDevice = device; 
+                          setState(() {
+                            _selectedPairedDevice = device;
                           });
                         },
                       ),
                       const SizedBox(height: 5),
                       ElevatedButton.icon(
-                        icon: _isConnecting 
-                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                           : Icon(isSelectedDeviceConnected ? Icons.link_off : Icons.link),
-                        label: Text(_isConnecting 
-                            ? "Working..." 
-                            : (isSelectedDeviceConnected ? "Disconnect" : "Connect Selected")),
+                        icon: _isConnecting
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            : Icon(isSelectedDeviceConnected ? Icons.link_off : Icons.link),
+                        label: Text(_isConnecting
+                            ? lang.translate('working')
+                            : (isSelectedDeviceConnected ? lang.translate('disconnect') : lang.translate('connect_selected'))),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isSelectedDeviceConnected ? Colors.redAccent : Colors.green, 
-                          foregroundColor: Colors.white
+                          backgroundColor: isSelectedDeviceConnected ? Colors.redAccent : Colors.green,
+                          foregroundColor: Colors.white,
                         ),
                         onPressed: (_selectedPairedDevice == null || _isConnecting) ? null : _toggleConnection,
                       ),
-                      if (_connectedMac != null) 
+                      if (_connectedMac != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 8.0),
                           child: Text(
-                            isSelectedDeviceConnected 
-                                ? "Connected to ${_selectedPairedDevice?.name}" 
-                                : "Connected to another device",
+                            isSelectedDeviceConnected
+                                ? "${lang.translate('connected_to')} ${_selectedPairedDevice?.name}"
+                                : lang.translate('connected_other'),
                             style: TextStyle(
-                              color: isSelectedDeviceConnected ? Colors.green : Colors.orange, 
-                              fontWeight: FontWeight.bold
+                              color: isSelectedDeviceConnected ? Colors.green : Colors.orange,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
                       const Divider(),
-                      OutlinedButton.icon(icon: const Icon(Icons.search), label: const Text("Search for Devices"), onPressed: _navigateToScanPage),
+                      OutlinedButton.icon(
+                          icon: const Icon(Icons.search),
+                          label: Text(lang.translate('search_devices')),
+                          onPressed: _navigateToScanPage
+                      ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 20),
 
-              const Text("2. Native / System Print", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(lang.translate('sec_native'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               Card(
                 color: Colors.orange[50],
                 child: Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Column(
                     children: [
-                      const Text("Uses Android/iOS System Print Service.\nPreview matches configured paper width.", textAlign: TextAlign.center),
+                      Text(lang.translate('native_desc'), textAlign: TextAlign.center),
                       const SizedBox(height: 10),
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
                           icon: const Icon(Icons.print),
-                          label: const Text("TEST SYSTEM PRINT"),
+                          label: Text(lang.translate('test_system_button')),
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
                           onPressed: _testNativePrintService,
                         ),
@@ -375,18 +432,18 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
-               const SizedBox(height: 20),
-               
-               const Text("3. Configuration", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-               Card(
-                 child: ListTile(
-                   leading: const Icon(Icons.settings_applications, size: 40, color: Colors.blueGrey),
-                   title: const Text("Width & DPI Settings"),
-                   subtitle: const Text("Set 58mm or 80mm paper size"),
-                   trailing: const Icon(Icons.arrow_forward_ios),
-                   onTap: _openSettings,
-                 ),
-               )
+              const SizedBox(height: 20),
+
+              Text(lang.translate('sec_config'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.settings_applications, size: 40, color: Colors.blueGrey),
+                  title: Text(lang.translate('width_dpi')),
+                  subtitle: Text(lang.translate('width_desc')),
+                  trailing: const Icon(Icons.arrow_forward_ios),
+                  onTap: _openPrinterConfig,
+                ),
+              )
             ],
           ),
         ),
