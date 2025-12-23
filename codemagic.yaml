@@ -13,27 +13,26 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Fix Repo & Dependencies)
+      - name: Install Pods & Build iOS Release
         script: |
+          # 1. Enter iOS directory
           cd ios
-          
-          # 1. Clean existing artifacts to ensure a fresh start
+
+          # 2. Clean existing artifacts to ensure a fresh start
           rm -rf Pods
           rm -f Podfile.lock
-          
-          # 2. FORCE update the CocoaPods registry
-          # This downloads the latest package list from the internet.
-          # It fixes the "Unable to find specification" error.
-          pod repo update
-          
-          # 3. Install Pods using the freshly updated registry
-          pod install
-          
+
+          # 3. Install Pods with FORCED repo update
+          # The flag --repo-update is critical here. It forces CocoaPods to 
+          # fetch the missing specs (like share_handler_ios_models) immediately.
+          pod install --repo-update
+
+          # 4. Return to root
           cd ..
 
-      - name: Build iOS Release (No Code Signing)
-        script: |
-          # Build the .app bundle without signing
+          # 5. Build the .app bundle without signing
+          # Since we just ran pod install successfully above, Flutter will 
+          # detect the existing Pods and skip the failing internal pod install.
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
