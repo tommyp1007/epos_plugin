@@ -13,42 +13,43 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Clean Install)
+      - name: Install CocoaPods (Fix Repo & Dependencies)
         script: |
-          # Go to iOS folder
           cd ios
           
-          # Remove existing Pods to force a refresh (Critical to prevent stale dependency errors)
+          # 1. Force update the CocoaPods public repository
+          # This fixes the "Unable to find specification" error
+          pod repo update
+          
+          # 2. Remove existing artifacts to ensure a clean install
           rm -rf Pods
           rm -rf Podfile.lock
           
-          # Install fresh pods
-          pod install --repo-update
+          # 3. Install Pods using the freshly updated repo
+          pod install
+          
           cd ..
 
       - name: Build iOS Release (No Code Signing)
         script: |
           # Build the .app bundle without signing
-          # This generates the raw binary needed for manual packaging
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
         script: |
-          # Navigate to the build output directory
           cd build/ios/iphoneos
           
-          # 1. Clean up previous artifacts to avoid confusion
+          # 1. Clean up previous artifacts
           rm -rf Payload
           rm -rf *.ipa
           
           # 2. Create the Payload folder structure required by Apple
           mkdir Payload
           
-          # 3. Copy the compiled Runner.app into the Payload folder
+          # 3. Copy the Runner.app into Payload
           cp -r Runner.app Payload/
           
           # 4. Zip the Payload folder into an .ipa file
-          # Naming it 'epos_print_plugin' to match your project
           zip -r epos_print_plugin.ipa Payload
 
     artifacts:
