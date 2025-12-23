@@ -1,6 +1,6 @@
 workflows:
   ios-unsigned-fix:
-    name: iOS Unsigned (Auto-Repair Project)
+    name: iOS Unsigned (Auto-Repair)
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
@@ -9,44 +9,50 @@ workflows:
       cocoapods: default
     
     scripts:
-      - name: Get Flutter packages
-        script: |
-          flutter pub get
-
       - name: Repair Corrupted Xcode Project
         script: |
-          # 1. Delete the corrupted project settings file
+          # 1. Delete the corrupted project settings file from the repo
           echo "Deleting damaged Runner.xcodeproj..."
           rm -rf ios/Runner.xcodeproj
           
           # 2. Force Flutter to regenerate the ios project structure
-          # This keeps your code (AppDelegate, Info.plist) but creates a fresh, working .xcodeproj
+          # This creates a fresh, working project file while keeping your code/Info.plist
           echo "Regenerating iOS project..."
           flutter create . --platforms ios
 
-      - name: Install CocoaPods
+      - name: Get Flutter packages
         script: |
-          # 3. Re-install pods now that the project file is fixed
-          find . -name "Podfile" -execdir pod install \;
+          # 3. Download Dart dependencies
+          flutter pub get
+
+      - name: Install Pods
+        script: |
+          # 4. Install iOS dependencies (Standard method)
+          # We use a clean install to avoid caching issues
+          cd ios
+          rm -rf Pods
+          rm -f Podfile.lock
+          pod install
+          cd ..
 
       - name: Build iOS App (No Codesign)
         script: |
-          # 4. Build the Release version, skipping code signing
+          # 5. Build the Release version, skipping code signing
           flutter build ios --release --no-codesign
 
       - name: Package as IPA
         script: |
-          # 5. Navigate to the build output
+          # 6. Navigate to the build output
           cd build/ios/iphoneos
           
-          # 6. Create the IPA folder structure (Payload/Runner.app)
+          # 7. Create the IPA folder structure (Payload/Runner.app)
           mkdir Payload
           mv Runner.app Payload/
           
-          # 7. Zip it into an IPA (using -y to preserve symlinks)
+          # 8. Zip it into an IPA (using -y to preserve symlinks)
           zip -r -y app_unsigned.ipa Payload/
           
-          # 8. Export artifact
+          # 9. Export artifact
           mv app_unsigned.ipa $CM_EXPORT_DIR/runner_unsigned.ipa
 
     artifacts:
