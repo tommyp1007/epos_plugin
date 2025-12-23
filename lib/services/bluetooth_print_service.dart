@@ -14,7 +14,6 @@ class BluetoothPrintService {
   /// Check connection status using the device's current state stream
   bool get isConnected {
     if (_connectedDevice == null) return false;
-    // Note: In newer FlutterBluePlus, we rely on tracking the state or using connectedDevices
     return _connectedDevice!.isConnected; 
   }
 
@@ -22,15 +21,12 @@ class BluetoothPrintService {
   Future<bool> requestPermissions() async {
     if (Platform.isAndroid) {
       // Android 12+ (SDK 31+) permissions
-      // If permission_handler detects API < 31, requesting 'bluetoothScan' usually returns restricted/granted automatically.
-      
       Map<Permission, PermissionStatus> statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.location, // Critical for detection on older Android (Huawei/Samsung)
       ].request();
 
-      // Logic: If Scan/Connect are granted (Android 12+) OR Location is granted (Android <12)
       bool scanGranted = statuses[Permission.bluetoothScan]?.isGranted ?? false;
       bool connectGranted = statuses[Permission.bluetoothConnect]?.isGranted ?? false;
       bool locationGranted = statuses[Permission.location]?.isGranted ?? false;
@@ -51,7 +47,6 @@ class BluetoothPrintService {
   Future<void> startScan() async {
     // Check if Bluetooth is actually On before scanning to avoid errors
     if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-      // The UI will catch this Exception and display "Error: Bluetooth is off"
       throw Exception("Bluetooth is off");
     }
     // Timeout ensures we don't drain battery
@@ -72,9 +67,15 @@ class BluetoothPrintService {
         return true; // Already connected
       }
 
-      // Connect with auto-reconnect disabled for printers usually
-      // mtu: null allows the OS to negotiate (important for iOS)
-      await device.connect(autoConnect: false, mtu: null);
+      // --- FIX APPLIED HERE ---
+      // We added 'license: License.free'. 
+      // If you are a commercial entity with >15 employees, use License.commercial.
+      await device.connect(
+        license: License.free, // Required in flutter_blue_plus v2.0+
+        autoConnect: false, 
+        mtu: null
+      );
+      
       _connectedDevice = device;
 
       // 4. Discover Services & Find Write Characteristic
@@ -89,7 +90,6 @@ class BluetoothPrintService {
           // Printers usually have one specific characteristic for data.
           if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
             _writeCharacteristic = characteristic;
-            // We found a candidate. Most printers only have one writable characteristic.
             return true;
           }
         }
@@ -124,7 +124,6 @@ class BluetoothPrintService {
     }
 
     // Determine the type of write (With Response is slower but more reliable, Without Response is faster)
-    // Thermal printers usually prefer 'WithoutResponse' for speed, but we must check if the device supports it.
     final bool canWriteNoResponse = _writeCharacteristic!.properties.writeWithoutResponse;
     final bool canWriteResponse = _writeCharacteristic!.properties.write;
     
@@ -135,8 +134,6 @@ class BluetoothPrintService {
     }
 
     // BLE has a limit (MTU). We must split data into chunks.
-    // Standard BLE MTU is often ~20 bytes, but can be negotiated higher. 
-    // 100-150 bytes is a safe middle ground for modern phones.
     const int chunkSize = 150; 
 
     for (int i = 0; i < bytes.length; i += chunkSize) {
@@ -147,7 +144,6 @@ class BluetoothPrintService {
         await _writeCharacteristic!.write(chunk, withoutResponse: useWithoutResponse);
         
         // Small delay is CRITICAL for Android to prevent buffer overflow
-        // iOS manages this better internally, but Android needs help.
         int delay = Platform.isAndroid ? 15 : 5; 
         await Future.delayed(Duration(milliseconds: delay)); 
       } catch (e) {

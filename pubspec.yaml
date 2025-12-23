@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.10.3 <4.0.0"
+  sdk: ^3.10.3
 
 dependencies:
   flutter:
@@ -19,54 +19,48 @@ dependencies:
   # ------------------------------------------------
   # Printing & Document Generation
   # ------------------------------------------------
-  printing: ^5.14.2              
-  pdf: ^3.11.3                   
-  esc_pos_utils_plus: ^2.0.0     
-  print_bluetooth_thermal: ^1.1.9 
+  printing: ^5.14.2              # Standard printing & PDF preview
+  pdf: ^3.11.3                   # PDF creation
+  esc_pos_utils_plus: ^2.0.0     # Generate ESC/POS commands (Thermal)
+  print_bluetooth_thermal: ^1.1.9 # Bluetooth thermal specific
 
   # ------------------------------------------------
-  # Connectivity
+  # Connectivity (Bluetooth, Network, USB)
   # ------------------------------------------------
-  flutter_blue_plus: ^1.32.0     
-  flutter_bluetooth_serial: ^0.4.0 
-  usb_serial: ^0.5.0            
-  network_info_plus: ^5.0.3      # Fixed: 7.0.0/9.0.0 do not exist. 5.0.3 is latest.
-  ping_discover_network_forked: ^0.0.1 
+  flutter_blue_plus: ^2.1.0     # BLE connectivity
+  flutter_bluetooth_serial: ^0.4.0 # BLE and Classic connectivity
+  usb_serial: ^0.5.0             # USB OTG connection
+  network_info_plus: ^7.0.0      # WiFi IP discovery
+  ping_discover_network_forked: ^0.0.1 # Scan network ports (9100)
 
   # ------------------------------------------------
   # System, Storage & Permissions
   # ------------------------------------------------
-  # Fixed: 12.0.1 doesn't exist. 11.3.1 is the latest stable.
-  permission_handler: ^11.3.1    
-  
-  # Fixed: 12.3.0 doesn't exist. 10.1.2 is the latest stable.
-  device_info_plus: ^10.1.2      
-  
-  # Fixed: 2.5.4 doesn't exist. 2.3.2 is the latest stable.
-  shared_preferences: ^2.3.2     
-  
-  # Fixed: Using the version recommended by your error logs
-  share_handler: ^0.0.25         
+  permission_handler: ^12.0.1    # Handle Android/iOS permissions
+  device_info_plus: ^12.3.0      # Get Android/iOS version info
+  shared_preferences: ^2.5.4     # Local storage (Settings)
+  share_handler: ^0.0.25         # Appear in "Share" intent menus
 
   # ------------------------------------------------
   # Media & Image Processing
   # ------------------------------------------------
-  image: ^4.2.0                  
-  image_picker: ^1.1.2           
+  image: ^4.0.0                  # Image processing (encoding/decoding)
+  image_picker: ^1.2.1           # Pick images from Gallery/Camera
 
   # ------------------------------------------------
   # UI & Assets
   # ------------------------------------------------
-  cupertino_icons: ^1.0.8        
-  webview_flutter: ^4.8.0        # Fixed: 4.13.0 does not exist yet.
+  cupertino_icons: ^1.0.8        # iOS style icons
+  webview_flutter: ^4.13.0       # Render web content
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   
-  flutter_lints: ^4.0.0          # Fixed: 6.0.0 does not exist. 4.0.0 is latest.
+  flutter_lints: ^6.0.0
 
-  flutter_launcher_icons: ^0.13.1
+  # Tool to generate App Icons
+  flutter_launcher_icons: ^0.14.4
 
 # ------------------------------------------------
 # Configuration for App Icons
@@ -75,11 +69,12 @@ flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
   image_path: "assets/images/icon.png"
-  min_sdk_android: 21
+  min_sdk_android: 21 # Optional: ensures support for adaptive icons
 
 flutter:
   uses-material-design: true
 
+  # Ensure your icon asset is declared here if you use it inside the app UI too
   assets:
     - assets/images/
     - assets/images/menu_icon.png

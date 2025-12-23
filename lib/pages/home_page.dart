@@ -5,17 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:provider/provider.dart'; 
+import 'package:provider/provider.dart';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../services/printer_service.dart';
-import '../services/language_service.dart'; 
+import '../services/language_service.dart';
 import 'width_settings.dart';
 import 'scan_devices.dart';
-import 'app_info.dart'; 
+import 'app_info.dart';
 
 class HomePage extends StatefulWidget {
   final String? sharedFilePath;
@@ -207,9 +207,6 @@ class _HomePageState extends State<HomePage> {
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
-    // Get fonts to support multilingual text if needed (optional but good practice)
-    // For standard PDF generation, ensure the font supports special characters if you use them.
-
     try {
       final prefs = await SharedPreferences.getInstance();
       final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
@@ -236,7 +233,8 @@ class _HomePageState extends State<HomePage> {
                   children: [
                     pw.Text(
                       lang.translate('test_print_title'), // "e-Pos System Test Print"
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
+                      textAlign: pw.TextAlign.center, // <--- ADDED THIS TO FIX ALIGNMENT
                     ),
                     pw.SizedBox(height: 5),
                     pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
