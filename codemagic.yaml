@@ -18,7 +18,7 @@ workflows:
           # Go to iOS folder
           cd ios
           
-          # Remove existing Pods to force a refresh (Critical after Podfile changes)
+          # Remove existing Pods to force a refresh (Critical to prevent stale dependency errors)
           rm -rf Pods
           rm -rf Podfile.lock
           
@@ -29,7 +29,7 @@ workflows:
       - name: Build iOS Release (No Code Signing)
         script: |
           # Build the .app bundle without signing
-          # Note: We use --no-codesign to generate a raw .app bundle
+          # This generates the raw binary needed for manual packaging
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
@@ -37,19 +37,19 @@ workflows:
           # Navigate to the build output directory
           cd build/ios/iphoneos
           
-          # 1. Clean up previous artifacts
+          # 1. Clean up previous artifacts to avoid confusion
           rm -rf Payload
           rm -rf *.ipa
           
           # 2. Create the Payload folder structure required by Apple
           mkdir Payload
           
-          # 3. Copy the Runner.app into Payload
+          # 3. Copy the compiled Runner.app into the Payload folder
           cp -r Runner.app Payload/
           
           # 4. Zip the Payload folder into an .ipa file
-          # We name it clearly so you know it is unsigned
-          zip -r epos_plugin.ipa Payload
+          # Naming it 'epos_print_plugin' to match your project
+          zip -r epos_print_plugin.ipa Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
