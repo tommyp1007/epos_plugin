@@ -79,8 +79,8 @@ class AppInfoPage extends StatelessWidget {
                   // --- UPDATED: BIGGER CUSTOM ICON ---
                   Image.asset(
                     'assets/images/menu_icon.png', 
-                    width: 100, // Bigger size
-                    height: 100,
+                    width: 150, // Bigger size
+                    height: 150,
                     fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 10),

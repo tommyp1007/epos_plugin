@@ -7,49 +7,43 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
+
     scripts:
-      - name: Clean and Get Packages
+      - name: Clean and Get Flutter Packages
         script: |
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Fix Repo & Dependencies)
+      - name: Install CocoaPods (Fix share_handler_ios_models)
         script: |
           cd ios
-          
-          # 1. Clean existing artifacts
+
+          # Fully reset CocoaPods state
+          pod deintegrate || true
           rm -rf Pods
           rm -f Podfile.lock
-          
-          # 2. Force update the CocoaPods public repository
-          # This fixes the "Unable to find specification" and "out-of-date" errors
-          pod repo update
-          
-          # 3. Install Pods using the freshly updated repo
-          pod install
-          
+
+          # Install pods AND update repo (critical fix)
+          pod install --repo-update
+
           cd ..
 
       - name: Build iOS Release (No Code Signing)
         script: |
-          # Build the .app bundle without signing
-          flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
         script: |
           cd build/ios/iphoneos
-          
-          # 1. Clean up previous artifacts
+
           rm -rf Payload *.ipa
-          
-          # 2. Create the Payload folder structure required by Apple
           mkdir Payload
-          
-          # 3. Copy the Runner.app into Payload
           cp -r Runner.app Payload/
-          
-          # 4. Zip the Payload folder into an .ipa file
-          zip -r "My-Invois_e-Pos_Printer.ipa" Payload
+
+          zip -r "MyInvois_e-Pos_Printer.ipa" Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
