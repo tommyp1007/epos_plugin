@@ -7,47 +7,49 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
-
     scripts:
-      - name: Clean and Get Flutter Packages
+      - name: Clean and Get Packages
         script: |
           flutter clean
           flutter pub get
 
-      - name: Update CocoaPods Specs (CRITICAL)
-        script: |
-          # Ensure CocoaPods repo is up to date
-          pod repo update
-
-      - name: Install Pods
+      - name: Install CocoaPods (Fix Repo & Dependencies)
         script: |
           cd ios
-
-          # Clean old pods
-          pod deintegrate || true
-          rm -rf Pods Podfile.lock
-
-          # Normal install (repo already updated)
+          
+          # 1. Clean existing artifacts
+          rm -rf Pods
+          rm -f Podfile.lock
+          
+          # 2. FORCE update the CocoaPods registry
+          # This fixes "Unable to find specification for share_handler_ios_models"
+          pod repo update
+          
+          # 3. Install Pods
           pod install
-
+          
           cd ..
 
       - name: Build iOS Release (No Code Signing)
         script: |
-          flutter build ios \
-            --release \
-            --no-codesign \
-            --build-number=$BUILD_NUMBER
+          # Build the .app bundle without signing
+          flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
         script: |
           cd build/ios/iphoneos
-
+          
+          # 1. Clean up previous artifacts
           rm -rf Payload *.ipa
+          
+          # 2. Create the Payload folder structure
           mkdir Payload
+          
+          # 3. Copy the Runner.app into Payload
           cp -r Runner.app Payload/
-
-          zip -r "My-Invois_e-Pos_Printer.ipa" Payload
+          
+          # 4. Zip the Payload into an IPA
+          zip -r "MyInvois_e-Pos_Printer.ipa" Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
