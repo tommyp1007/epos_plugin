@@ -14,7 +14,7 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Fix share_handler_ios_models)
+      - name: Install CocoaPods (Force Latest Specs)
         script: |
           cd ios
 
@@ -23,16 +23,17 @@ workflows:
           rm -rf Pods
           rm -f Podfile.lock
 
-          # Install pods AND update repo (critical fix)
+          # IMPORTANT: update specs + install
           pod install --repo-update
 
           cd ..
 
-      - name: Build iOS Release (No Code Signing)
+      - name: Build iOS Release (No Code Signing, No Pod Install)
         script: |
           flutter build ios \
             --release \
             --no-codesign \
+            --no-pod-install \
             --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
@@ -43,7 +44,7 @@ workflows:
           mkdir Payload
           cp -r Runner.app Payload/
 
-          zip -r "MyInvois_e-Pos_Printer.ipa" Payload
+          zip -r "My-Invois_e-Pos_Printer.ipa" Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
