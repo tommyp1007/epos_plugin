@@ -266,7 +266,7 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("My-Invois e-Pos Printer"),
+        title: const Text("MyInvois e-Pos Printer"),
         actions: [
           IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => _loadBondedDevices())

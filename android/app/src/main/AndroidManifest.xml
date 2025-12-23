@@ -19,7 +19,7 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
     
     <application
-        android:label="My-Invois e-Pos Printer"
+        android:label="MyInvois e-Pos Printer"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon"
         android:enableOnBackInvokedCallback="true"> <activity
