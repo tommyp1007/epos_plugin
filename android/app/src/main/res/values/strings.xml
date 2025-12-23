@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">e-Pos Printer Services</string>
+    
+    <string name="print_service_description">e-Pos Bluetooth Printer Service</string>
+</resources>

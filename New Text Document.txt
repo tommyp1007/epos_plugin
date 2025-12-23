@@ -1,0 +1,1595 @@
+nice, now it is available already. but somehow, i cannot use it to print receipt from website, when it go to the android native printer setting, it did appear in the list, but dont have option to choose the paper size, sizes, color, orientation, two-sided, pages. which code i need to update:
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+// Packages required for Native Print Service Testing
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
+import '../services/printer_service.dart';
+import '../services/image_processor.dart';
+import '../services/command_generator.dart';
+
+class HomePage extends StatefulWidget {
+  final String? sharedFilePath;
+
+  const HomePage({Key? key, this.sharedFilePath}) : super(key: key);
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final PrinterService _printerService = PrinterService();
+  final ImageProcessor _imageProcessor = ImageProcessor();
+  final CommandGenerator _commandGenerator = CommandGenerator();
+  final ImagePicker _picker = ImagePicker();
+
+  List<BluetoothInfo> _devices = [];
+  BluetoothInfo? _selectedDevice;
+  
+  bool _isConnected = false;
+  bool _isLoadingDevices = false;
+  File? _selectedFile;
+  Uint8List? _processedImageBytes;
+  bool _isProcessingImage = false;
+  String _selectedDriver = "GS v 0"; 
+  bool _isPrinting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPermissions();
+    if (widget.sharedFilePath != null) {
+      _handleNewFile(File(widget.sharedFilePath!));
+    }
+  }
+
+  Future<void> _checkPermissions() async {
+    if (Platform.isAndroid) {
+      await [
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
+    }
+    _loadBondedDevices();
+  }
+
+  Future<void> _loadBondedDevices() async {
+    setState(() => _isLoadingDevices = true);
+    try {
+      List<BluetoothInfo> devices = await _printerService.getBondedDevices();
+      setState(() {
+        _devices = devices;
+        if (devices.isNotEmpty) {
+          _selectedDevice ??= devices.first; 
+        }
+      });
+    } catch (e) {
+      _showSnackBar("Error loading devices: $e");
+    } finally {
+      setState(() => _isLoadingDevices = false);
+    }
+  }
+
+  Future<void> _toggleConnection() async {
+    if (_selectedDevice == null) return;
+    String mac = _selectedDevice!.macAdress; 
+
+    if (_isConnected) {
+      await _printerService.disconnect();
+      setState(() => _isConnected = false);
+    } else {
+      bool success = await _printerService.connect(mac);
+      setState(() => _isConnected = success);
+      if (success) _showSnackBar("Connected to ${_selectedDevice!.name}");
+    }
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        _handleNewFile(File(image.path));
+      }
+    } catch (e) {
+      _showSnackBar("Error picking image: $e");
+    }
+  }
+
+  Future<void> _handleNewFile(File file) async {
+    setState(() {
+      _selectedFile = file;
+      _isProcessingImage = true;
+      _processedImageBytes = null;
+    });
+
+    try {
+      final processedBytes = await _imageProcessor.processImageForPrinting(
+        file, 
+        targetWidth: ImageProcessor.kTargetWidth58mm
+      );
+
+      setState(() {
+        _processedImageBytes = processedBytes;
+      });
+    } catch (e) {
+      _showSnackBar("Error processing image: $e");
+    } finally {
+      setState(() => _isProcessingImage = false);
+    }
+  }
+
+  Future<void> _printImage() async {
+    bool actuallyConnected = await _printerService.isConnected;
+    
+    if (!actuallyConnected) {
+      setState(() => _isConnected = false);
+      _showSnackBar("Printer disconnected. Please reconnect.");
+      return;
+    }
+
+    if (_processedImageBytes == null) {
+      _showSnackBar("No image processed to print.");
+      return;
+    }
+
+    setState(() => _isPrinting = true);
+
+    try {
+      List<int> commands;
+      if (_selectedDriver == "GS v 0") {
+        commands = await _commandGenerator.generate_GS_v_0(_processedImageBytes!);
+      } else {
+        commands = await _commandGenerator.generate_ESC_Star(_processedImageBytes!);
+      }
+      commands.addAll([0x0A, 0x0A, 0x0A]); 
+      await _printerService.sendRawCommands(commands);
+      _showSnackBar("Data sent to printer!");
+    } catch (e) {
+      _showSnackBar("Print failed: $e");
+    } finally {
+      setState(() => _isPrinting = false);
+    }
+  }
+
+  // --- NEW: Test Native Service Logic ---
+  Future<void> _testNativePrintService() async {
+    try {
+      final doc = pw.Document();
+
+      doc.addPage(pw.Page(
+        pageFormat: PdfPageFormat.roll57, // Similar to 58mm
+        build: (pw.Context context) {
+          return pw.Center(
+            child: pw.Column(
+              mainAxisAlignment: pw.MainAxisAlignment.center,
+              children: [
+                pw.Text('e-Pos Native Service', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 10),
+                pw.Text('If you read this, the', style: pw.TextStyle(fontSize: 8)),
+                pw.Text('background service works!', style: pw.TextStyle(fontSize: 8)),
+                pw.SizedBox(height: 10),
+                // FIX: Use BarcodeWidget
+                pw.BarcodeWidget(
+                  barcode: pw.Barcode.qrCode(),
+                  data: 'https://flutter.dev',
+                  width: 100,
+                  height: 100,
+                ),
+                pw.SizedBox(height: 10),
+                pw.Text('End of Test', style: pw.TextStyle(fontSize: 8)),
+              ],
+            ),
+          );
+        },
+      ));
+
+      // This triggers the Android System Print Dialog
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => doc.save(),
+        name: 'ePos_Test_Receipt',
+      );
+    } catch (e) {
+      _showSnackBar("Error launching Native Print: $e");
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("e-Pos Printer Services"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadBondedDevices,
+          )
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // SECTION 1: CONNECTION
+              _buildSectionHeader("1. App-Internal Connection (Direct)"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      if (_isLoadingDevices)
+                        const LinearProgressIndicator()
+                      else
+                        DropdownButton<BluetoothInfo>(
+                          isExpanded: true,
+                          hint: const Text("Select a paired printer"),
+                          value: _devices.contains(_selectedDevice) ? _selectedDevice : null,
+                          items: _devices.map((device) {
+                            return DropdownMenuItem(
+                              value: device,
+                              child: Text(device.name),
+                            );
+                          }).toList(),
+                          onChanged: (device) {
+                            setState(() {
+                              _selectedDevice = device;
+                              _isConnected = false; 
+                            });
+                          },
+                        ),
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        icon: Icon(_isConnected ? Icons.link_off : Icons.link),
+                        label: Text(_isConnected ? "Disconnect" : "Connect"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _isConnected ? Colors.redAccent : Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: _selectedDevice == null ? null : _toggleConnection,
+                      ),
+                      if (_isConnected)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Text(
+                            "Connected to ${_selectedDevice?.name}", 
+                            style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)
+                          ),
+                        )
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // SECTION 2: IMAGE PROCESSING
+              _buildSectionHeader("2. Image Processing"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text("Select Image from Gallery"),
+                        onPressed: _pickImage,
+                      ),
+                      const SizedBox(height: 15),
+                      if (_isProcessingImage)
+                        const Column(
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 5),
+                            Text("Dithering Image..."),
+                          ],
+                        ),
+                      if (_processedImageBytes != null) ...[
+                        const Text("Preview (What will be printed):",
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        const SizedBox(height: 5),
+                        Container(
+                          height: 200,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            color: Colors.white,
+                          ),
+                          child: Image.memory(
+                            _processedImageBytes!,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          "Size: ${_processedImageBytes!.lengthInBytes} bytes",
+                          style: const TextStyle(color: Colors.grey, fontSize: 10),
+                        ),
+                      ]
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // SECTION 3: DIRECT PRINTING
+              _buildSectionHeader("3. Print via App (Internal)"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          labelText: "Driver / Command Set",
+                          border: OutlineInputBorder(),
+                        ),
+                        value: _selectedDriver,
+                        items: ["GS v 0", "ESC * 33"].map((String value) {
+                          return DropdownMenuItem<String>(
+                            value: value,
+                            child: Text(value),
+                          );
+                        }).toList(),
+                        onChanged: (newValue) {
+                          setState(() {
+                            _selectedDriver = newValue!;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 15),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.print),
+                          label: _isPrinting 
+                            ? const Text("Sending Data...") 
+                            : const Text("PRINT IMAGE (Internal)"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blueAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: (_isConnected && _processedImageBytes != null && !_isPrinting)
+                              ? _printImage
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+
+              // SECTION 4: NATIVE PRINT SERVICE TEST
+              _buildSectionHeader("4. Test Native Print Service"),
+              Card(
+                color: Colors.orange[50],
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      const Text(
+                        "This tests the Android System Print Service you created in Kotlin. It will open the system dialog.",
+                        style: TextStyle(fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.system_security_update_good),
+                          label: const Text("TEST SYSTEM PRINT"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: _testNativePrintService,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 18, 
+          fontWeight: FontWeight.bold, 
+          color: Colors.black87
+        ),
+      ),
+    );
+  }
+}
+
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+// Packages required for Native Print Service Testing
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
+import '../services/printer_service.dart';
+import '../services/image_processor.dart';
+import '../services/command_generator.dart';
+
+class HomePage extends StatefulWidget {
+  final String? sharedFilePath;
+
+  const HomePage({Key? key, this.sharedFilePath}) : super(key: key);
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final PrinterService _printerService = PrinterService();
+  final ImageProcessor _imageProcessor = ImageProcessor();
+  final CommandGenerator _commandGenerator = CommandGenerator();
+  final ImagePicker _picker = ImagePicker();
+
+  List<BluetoothInfo> _devices = [];
+  BluetoothInfo? _selectedDevice;
+  
+  bool _isConnected = false;
+  bool _isLoadingDevices = false;
+  File? _selectedFile;
+  Uint8List? _processedImageBytes;
+  bool _isProcessingImage = false;
+  String _selectedDriver = "GS v 0"; 
+  bool _isPrinting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPermissions();
+    if (widget.sharedFilePath != null) {
+      _handleNewFile(File(widget.sharedFilePath!));
+    }
+  }
+
+  Future<void> _checkPermissions() async {
+    if (Platform.isAndroid) {
+      await [
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
+    }
+    _loadBondedDevices();
+  }
+
+  Future<void> _loadBondedDevices() async {
+    setState(() => _isLoadingDevices = true);
+    try {
+      List<BluetoothInfo> devices = await _printerService.getBondedDevices();
+      setState(() {
+        _devices = devices;
+        if (devices.isNotEmpty) {
+          _selectedDevice ??= devices.first; 
+        }
+      });
+    } catch (e) {
+      _showSnackBar("Error loading devices: $e");
+    } finally {
+      setState(() => _isLoadingDevices = false);
+    }
+  }
+
+  Future<void> _toggleConnection() async {
+    if (_selectedDevice == null) return;
+    String mac = _selectedDevice!.macAdress; 
+
+    if (_isConnected) {
+      await _printerService.disconnect();
+      setState(() => _isConnected = false);
+    } else {
+      bool success = await _printerService.connect(mac);
+      setState(() => _isConnected = success);
+      if (success) _showSnackBar("Connected to ${_selectedDevice!.name}");
+    }
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        _handleNewFile(File(image.path));
+      }
+    } catch (e) {
+      _showSnackBar("Error picking image: $e");
+    }
+  }
+
+  Future<void> _handleNewFile(File file) async {
+    setState(() {
+      _selectedFile = file;
+      _isProcessingImage = true;
+      _processedImageBytes = null;
+    });
+
+    try {
+      final processedBytes = await _imageProcessor.processImageForPrinting(
+        file, 
+        targetWidth: ImageProcessor.kTargetWidth58mm
+      );
+
+      setState(() {
+        _processedImageBytes = processedBytes;
+      });
+    } catch (e) {
+      _showSnackBar("Error processing image: $e");
+    } finally {
+      setState(() => _isProcessingImage = false);
+    }
+  }
+
+  Future<void> _printImage() async {
+    bool actuallyConnected = await _printerService.isConnected;
+    
+    if (!actuallyConnected) {
+      setState(() => _isConnected = false);
+      _showSnackBar("Printer disconnected. Please reconnect.");
+      return;
+    }
+
+    if (_processedImageBytes == null) {
+      _showSnackBar("No image processed to print.");
+      return;
+    }
+
+    setState(() => _isPrinting = true);
+
+    try {
+      List<int> commands;
+      if (_selectedDriver == "GS v 0") {
+        commands = await _commandGenerator.generate_GS_v_0(_processedImageBytes!);
+      } else {
+        commands = await _commandGenerator.generate_ESC_Star(_processedImageBytes!);
+      }
+      commands.addAll([0x0A, 0x0A, 0x0A]); 
+      await _printerService.sendRawCommands(commands);
+      _showSnackBar("Data sent to printer!");
+    } catch (e) {
+      _showSnackBar("Print failed: $e");
+    } finally {
+      setState(() => _isPrinting = false);
+    }
+  }
+
+  // =========================================================
+  //  NATIVE SERVICE TEST (Generates 58mm Formatted PDF)
+  // =========================================================
+  Future<void> _testNativePrintService() async {
+    try {
+      final doc = pw.Document();
+
+      // 1. Define 58mm Roll Format
+      // 58mm width. Height is infinity (continuous roll). 
+      // Zero margins are crucial for thermal printers.
+      final roll58 = PdfPageFormat(58 * PdfPageFormat.mm, double.infinity, marginAll: 2 * PdfPageFormat.mm);
+
+      doc.addPage(pw.Page(
+        pageFormat: roll58, 
+        build: (pw.Context context) {
+          // Recreating the layout from your screenshot
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
+            children: [
+              pw.Text('AMIR HAMZAH BIN ABDUL HALIM', 
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold), textAlign: pw.TextAlign.center),
+              
+              pw.SizedBox(height: 4),
+              pw.Text('SST: 123412341234', style: const pw.TextStyle(fontSize: 8)),
+              pw.Text('TTX: 123123123123', style: const pw.TextStyle(fontSize: 8)),
+              pw.Text('No 20, JLN 1/15G,', style: const pw.TextStyle(fontSize: 8)),
+              pw.Text('43650, Bandar Baru Bangi, SELANGOR', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.center),
+              
+              pw.SizedBox(height: 8),
+              pw.Text('Scan QR Code to Request E-Invoice', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              
+              pw.SizedBox(height: 5),
+              // QR Code Side-by-Side with Order Info
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('Order No.: 601', style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold)),
+                        pw.Text('Receipt No.: 00756-007-0001', style: const pw.TextStyle(fontSize: 7)),
+                        pw.Text('Date: 11/12/2025 06:04:04 PM', style: const pw.TextStyle(fontSize: 7)),
+                        
+                        pw.SizedBox(height: 4),
+                        pw.Text('Request Timeline:', style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold)),
+                        pw.Text('Start Date: Next day after purchase', style: const pw.TextStyle(fontSize: 6)),
+                        pw.Text('Last Date: 1st calendar day of next month', style: const pw.TextStyle(fontSize: 6)),
+                      ]
+                    )
+                  ),
+                  pw.SizedBox(width: 5),
+                  pw.BarcodeWidget(
+                    barcode: pw.Barcode.qrCode(),
+                    data: 'https://lhdn.example.com/invoice/12345',
+                    width: 50,
+                    height: 50,
+                  ),
+                ]
+              ),
+
+              pw.SizedBox(height: 5),
+              pw.Divider(thickness: 1),
+
+              // Table Header
+              pw.Row(children: [
+                pw.Expanded(flex: 3, child: pw.Text('Product', style: const pw.TextStyle(fontSize: 8))),
+                pw.Expanded(flex: 1, child: pw.Text('Price', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+                pw.Expanded(flex: 1, child: pw.Text('Qty', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+                pw.Expanded(flex: 1, child: pw.Text('Total', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+              ]),
+              pw.Divider(borderStyle: pw.BorderStyle.dashed),
+
+              // Item 1
+              pw.Row(children: [
+                pw.Expanded(flex: 3, child: pw.Text('Coca Cola', style: const pw.TextStyle(fontSize: 8))),
+                pw.Expanded(flex: 1, child: pw.Text('4.00', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+                pw.Expanded(flex: 1, child: pw.Text('1.00', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+                pw.Expanded(flex: 1, child: pw.Text('4.00', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.right)),
+              ]),
+              
+              pw.SizedBox(height: 5),
+              pw.Divider(thickness: 0.5),
+
+              // Totals
+              pw.Row(children: [
+                pw.Text('Subtotal:', style: const pw.TextStyle(fontSize: 8)),
+                pw.Spacer(),
+                pw.Text('RM 4.00', style: const pw.TextStyle(fontSize: 8)),
+              ]),
+              pw.Row(children: [
+                pw.Text('Rounding Amount:', style: const pw.TextStyle(fontSize: 8)),
+                pw.Spacer(),
+                pw.Text('RM 0.00', style: const pw.TextStyle(fontSize: 8)),
+              ]),
+              pw.SizedBox(height: 2),
+              pw.Row(children: [
+                pw.Text('TOTAL:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                pw.Spacer(),
+                pw.Text('RM 4.00', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              ]),
+              
+              pw.SizedBox(height: 5),
+              pw.Row(children: [
+                pw.Text('Cash:', style: const pw.TextStyle(fontSize: 8)),
+                pw.Spacer(),
+                pw.Text('RM 4.00', style: const pw.TextStyle(fontSize: 8)),
+              ]),
+               pw.Row(children: [
+                pw.Text('CHANGE:', style: const pw.TextStyle(fontSize: 8)),
+                pw.Spacer(),
+                pw.Text('RM 0.00', style: const pw.TextStyle(fontSize: 8)),
+              ]),
+
+              pw.SizedBox(height: 10),
+              pw.Text('Cashier: AMIR HAMZAH BIN ABDUL HALIM', style: const pw.TextStyle(fontSize: 7), textAlign: pw.TextAlign.center),
+              pw.SizedBox(height: 5),
+              pw.Text('Thank You!', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 10),
+            ],
+          );
+        },
+      ));
+
+      // This triggers the Android System Print Dialog
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => doc.save(),
+        name: 'LHDN_Receipt_Test',
+      );
+    } catch (e) {
+      _showSnackBar("Error launching Native Print: $e");
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("e-Pos Printer Services"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadBondedDevices,
+          )
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // SECTION 1: CONNECTION
+              _buildSectionHeader("1. App-Internal Connection (Direct)"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      if (_isLoadingDevices)
+                        const LinearProgressIndicator()
+                      else
+                        DropdownButton<BluetoothInfo>(
+                          isExpanded: true,
+                          hint: const Text("Select a paired printer"),
+                          value: _devices.contains(_selectedDevice) ? _selectedDevice : null,
+                          items: _devices.map((device) {
+                            return DropdownMenuItem(
+                              value: device,
+                              child: Text(device.name),
+                            );
+                          }).toList(),
+                          onChanged: (device) {
+                            setState(() {
+                              _selectedDevice = device;
+                              _isConnected = false; 
+                            });
+                          },
+                        ),
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        icon: Icon(_isConnected ? Icons.link_off : Icons.link),
+                        label: Text(_isConnected ? "Disconnect" : "Connect"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _isConnected ? Colors.redAccent : Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: _selectedDevice == null ? null : _toggleConnection,
+                      ),
+                      if (_isConnected)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Text(
+                            "Connected to ${_selectedDevice?.name}", 
+                            style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)
+                          ),
+                        )
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // SECTION 2: IMAGE PROCESSING
+              _buildSectionHeader("2. Image Processing"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text("Select Image from Gallery"),
+                        onPressed: _pickImage,
+                      ),
+                      const SizedBox(height: 15),
+                      if (_isProcessingImage)
+                        const Column(
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 5),
+                            Text("Dithering Image..."),
+                          ],
+                        ),
+                      if (_processedImageBytes != null) ...[
+                        const Text("Preview (What will be printed):",
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        const SizedBox(height: 5),
+                        Container(
+                          height: 200,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            color: Colors.white,
+                          ),
+                          child: Image.memory(
+                            _processedImageBytes!,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          "Size: ${_processedImageBytes!.lengthInBytes} bytes",
+                          style: const TextStyle(color: Colors.grey, fontSize: 10),
+                        ),
+                      ]
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // SECTION 3: DIRECT PRINTING
+              _buildSectionHeader("3. Print via App (Internal)"),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          labelText: "Driver / Command Set",
+                          border: OutlineInputBorder(),
+                        ),
+                        value: _selectedDriver,
+                        items: ["GS v 0", "ESC * 33"].map((String value) {
+                          return DropdownMenuItem<String>(
+                            value: value,
+                            child: Text(value),
+                          );
+                        }).toList(),
+                        onChanged: (newValue) {
+                          setState(() {
+                            _selectedDriver = newValue!;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 15),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.print),
+                          label: _isPrinting 
+                            ? const Text("Sending Data...") 
+                            : const Text("PRINT IMAGE (Internal)"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blueAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: (_isConnected && _processedImageBytes != null && !_isPrinting)
+                              ? _printImage
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+
+              // SECTION 4: NATIVE PRINT SERVICE TEST
+              _buildSectionHeader("4. Test Native Print Service"),
+              Card(
+                color: Colors.orange[50],
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    children: [
+                      const Text(
+                        "This uses the Android Print Manager. Ensure you select 'e-Pos Printer Services' in the dialog.",
+                        style: TextStyle(fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.system_security_update_good),
+                          label: const Text("TEST SYSTEM PRINT"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: _testNativePrintService,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 18, 
+          fontWeight: FontWeight.bold, 
+          color: Colors.black87
+        ),
+      ),
+    );
+  }
+}
+
+import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../services/bluetooth_print_service.dart';
+import '../utils/raw_commands.dart';
+
+class TestPrintPage extends StatefulWidget {
+  @override
+  _TestPrintPageState createState() => _TestPrintPageState();
+}
+
+class _TestPrintPageState extends State<TestPrintPage> {
+  final _service = BluetoothPrintService();
+  
+  // FlutterBluePlus returns a List<ScanResult> in its stream
+  List<ScanResult> _scanResults = [];
+  bool _isScanning = false;
+  String? _connectedDeviceName;
+
+  @override
+  void initState() {
+    super.initState();
+    _initBluetooth();
+  }
+
+  void _initBluetooth() {
+    // Listen to scan results stream
+    _service.scanResults.listen((results) {
+      setState(() {
+        _scanResults = results;
+      });
+    });
+
+    // Listen to scanning state (is it currently scanning?)
+    FlutterBluePlus.isScanning.listen((state) {
+      setState(() {
+        _isScanning = state;
+      });
+    });
+
+    _startScan();
+  }
+
+  void _startScan() async {
+    await _service.requestPermissions();
+    _service.startScan();
+  }
+
+  void _connectToDevice(BluetoothDevice device) async {
+    // Stop scanning before connecting to ensure stability
+    await _service.stopScan();
+
+    bool success = await _service.connect(device);
+    
+    if (success) {
+      setState(() { 
+        _connectedDeviceName = device.platformName.isNotEmpty 
+            ? device.platformName 
+            : device.remoteId.str; 
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Connected!")));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Connection Failed")));
+    }
+  }
+
+  void _printTest() async {
+    try {
+      List<int> bytes = [];
+      
+      // 1. Reset
+      bytes.addAll(RawCommands.reset());
+      
+      // 2. Text Command
+      bytes.addAll("e-Pos BLE Service Test\n".codeUnits);
+      bytes.addAll("----------------\n".codeUnits);
+      bytes.addAll("Modern Bluetooth Stack\n".codeUnits);
+      bytes.addAll("Works on iOS & Android!\n\n\n".codeUnits);
+      
+      // 3. Feed & Cut
+      bytes.addAll(RawCommands.feed(3));
+
+      await _service.sendBytes(bytes);
+      
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Print Error: $e")));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("BLE Printer Manager")),
+      body: Column(
+        children: [
+          // Header Status
+          Container(
+            padding: EdgeInsets.all(16),
+            color: _connectedDeviceName != null ? Colors.green[100] : Colors.grey[200],
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(_connectedDeviceName != null 
+                    ? "Connected to: $_connectedDeviceName" 
+                    : "Not Connected"),
+                ),
+                if (_connectedDeviceName != null)
+                  ElevatedButton(
+                    onPressed: _printTest, 
+                    child: Text("TEST PRINT")
+                  )
+              ],
+            ),
+          ),
+          
+          // Scan Button
+          if (!_isScanning)
+            TextButton.icon(
+              icon: Icon(Icons.refresh), 
+              label: Text("Scan Again"), 
+              onPressed: _startScan
+            )
+          else 
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: CircularProgressIndicator(),
+            ),
+            
+          // Device List
+          Expanded(
+            child: ListView.builder(
+              itemCount: _scanResults.length,
+              itemBuilder: (context, index) {
+                final result = _scanResults[index];
+                final device = result.device;
+                
+                // Filter out devices with no name to keep UI clean (optional)
+                if (device.platformName.isEmpty) return SizedBox.shrink();
+
+                return ListTile(
+                  title: Text(device.platformName),
+                  subtitle: Text(device.remoteId.str), // remoteId is the Mac Address/UUID
+                  trailing: Text("${result.rssi} dBm"), // Signal strength
+                  onTap: () => _connectToDevice(device),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+class BluetoothPrintService {
+  static final BluetoothPrintService _instance = BluetoothPrintService._internal();
+  factory BluetoothPrintService() => _instance;
+  BluetoothPrintService._internal();
+
+  BluetoothDevice? _connectedDevice;
+  BluetoothCharacteristic? _writeCharacteristic;
+
+  bool get isConnected => _connectedDevice != null && _connectedDevice!.isConnected;
+
+  // 1. Request Permissions
+  Future<bool> requestPermissions() async {
+    // Android 12+ requires specific scan/connect permissions
+    if (Platform.isAndroid) {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location, // Required for BLE on older Androids
+      ].request();
+      return statuses.values.every((status) => status.isGranted);
+    }
+    return true; // iOS handles permissions via Info.plist mostly
+  }
+
+  // 2. Scan for Devices (BLE)
+  // We return the stream of list results provided by the library
+  Stream<List<ScanResult>> get scanResults => FlutterBluePlus.scanResults;
+
+  Future<void> startScan() async {
+    // Timeout ensures we don't drain battery
+    return FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+  }
+
+  Future<void> stopScan() async {
+    return FlutterBluePlus.stopScan();
+  }
+
+  // 3. Connect to a specific printer
+  Future<bool> connect(BluetoothDevice device) async {
+    try {
+      if (_connectedDevice != null && _connectedDevice!.remoteId == device.remoteId) {
+        return true; // Already connected
+      }
+
+      await disconnect(); // Clean up old connection
+
+      // Connect with auto-reconnect disabled for printers usually
+      await device.connect(autoConnect: false);
+      _connectedDevice = device;
+
+      // 4. Discover Services & Find Write Characteristic
+      // BLE devices have "Services", inside services are "Characteristics".
+      // We need to find the one allowed to "Write".
+      List<BluetoothService> services = await device.discoverServices();
+      
+      for (var service in services) {
+        for (var characteristic in service.characteristics) {
+          if (characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+            _writeCharacteristic = characteristic;
+            return true;
+          }
+        }
+      }
+      
+      return true;
+    } catch (e) {
+      print("Connection failed: $e");
+      return false;
+    }
+  }
+
+  // 5. Disconnect
+  Future<void> disconnect() async {
+    if (_connectedDevice != null) {
+      await _connectedDevice!.disconnect();
+      _connectedDevice = null;
+      _writeCharacteristic = null;
+    }
+  }
+
+  // 6. Send Bytes (With Chunking for BLE)
+  Future<void> sendBytes(List<int> bytes) async {
+    if (_connectedDevice == null || _writeCharacteristic == null) {
+      throw Exception("Not connected or Write Characteristic not found");
+    }
+
+    // BLE has a limit (MTU). We must split data into chunks (e.g., 100 bytes)
+    // or the printer will drop the data.
+    const int chunkSize = 100; 
+    for (int i = 0; i < bytes.length; i += chunkSize) {
+      int end = (i + chunkSize < bytes.length) ? i + chunkSize : bytes.length;
+      List<int> chunk = bytes.sublist(i, end);
+      
+      // writeWithoutResponse is faster and usually preferred for thermal printers
+      await _writeCharacteristic!.write(chunk, withoutResponse: true);
+      
+      // Small delay to prevent flooding the buffer
+      await Future.delayed(const Duration(milliseconds: 10)); 
+    }
+  }
+}
+
+import 'dart:typed_data';
+import 'package:image/image.dart' as img;
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+
+class CommandGenerator {
+  
+  /// DRIVER OPTION 1: GS v 0 (Raster Bit Image)
+  /// This is the standard for 90% of modern thermal printers.
+  /// It prints faster because it sends data in larger blocks.
+  Future<List<int>> generate_GS_v_0(Uint8List imageBytes) async {
+    // 1. Decode the PNG bytes back to an Image object for processing
+    img.Image? src = img.decodeImage(imageBytes);
+    if (src == null) return [];
+
+    // 2. Load the capability profile (Generic is safe for most)
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(PaperSize.mm58, profile);
+
+    // 3. Generate the command
+    // imageRaster uses the GS v 0 command internally
+    return generator.imageRaster(src, align: PosAlign.center);
+  }
+
+  /// DRIVER OPTION 2: ESC * 33 (Bit Image Column Mode)
+  /// Use this for older Epson printers or if GS v 0 prints garbage.
+  /// It is slower because it prints line-by-line.
+  Future<List<int>> generate_ESC_Star(Uint8List imageBytes) async {
+    img.Image? src = img.decodeImage(imageBytes);
+    if (src == null) return [];
+
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(PaperSize.mm58, profile);
+
+    // image() uses the legacy ESC * command
+    return generator.image(src, align: PosAlign.center);
+  }
+}
+
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:image/image.dart' as img;
+
+class ImageProcessor {
+  // Standard printable width in pixels for common thermal printers.
+  // 58mm paper usually has a printable width of ~384 pixels.
+  // 80mm paper usually has a printable width of ~576 pixels.
+  static const int kTargetWidth58mm = 384;
+  static const int kTargetWidth80mm = 576;
+
+  /// The main entry point.
+  /// Takes an image file, resizes it to fit the printer paper,
+  /// converts it to grayscale, and then applies Floyd-Steinberg dithering
+  /// to create a binary (black and white only) image suitable for thermal printing.
+  Future<Uint8List?> processImageForPrinting(File imageFile, {int targetWidth = kTargetWidth58mm}) async {
+    try {
+      // 1. Read file bytes
+      final Uint8List bytes = await imageFile.readAsBytes();
+
+      // 2. Decode image using the 'image' library
+      img.Image? src = img.decodeImage(bytes);
+
+      if (src == null) {
+        print("Failed to decode image.");
+        return null;
+      }
+
+      // --- STEP A: Resize ---
+      // Thermal printers print line by line. If the image is wider than the
+      // thermal head, it will be chopped off or wrap weirdly. We must resize down.
+      if (src.width > targetWidth) {
+        print("Resizing image from ${src.width} to $targetWidth");
+        // copyResize automatically calculates height to maintain aspect ratio.
+        // Interpolation.average yields smoother results when downsizing photos.
+        src = img.copyResize(
+          src, 
+          width: targetWidth, 
+          interpolation: img.Interpolation.average
+        );
+      }
+
+      // --- STEP B: Grayscale Conversion ---
+      // Before we can dither, we need to remove color information.
+      src = img.grayscale(src);
+
+      // --- STEP C: Floyd-Steinberg Dithering ---
+      // This is the magic sauce of e-Pos Printer Services for photos.
+      // It converts shades of gray into scattered black dots.
+      // We use a BinaryQuantizer because we only want 2 colors: Black and White.
+      img.Image dithered = img.ditherImage(
+        src,
+        quantizer: img.BinaryQuantizer(),
+        kernel: img.DitherKernel.floydSteinberg,
+      );
+
+      print("Image processed successfully: ${dithered.width}x${dithered.height}");
+
+      // 4. Encode back to PNG bytes (or keep as img.Image depending on next step)
+      // We return PNG bytes here so it can be easily displayed in Flutter UI for preview.
+      // The printer command generator will decode this later.
+      return Uint8List.fromList(img.encodePng(dithered));
+
+    } catch (e) {
+      print("Error processing image: $e");
+      return null;
+    }
+  }
+
+  /// Helper: Invert image (useful sometimes for thermal printing)
+  Future<Uint8List?> invertImage(Uint8List imageBytes) async {
+    img.Image? src = img.decodeImage(imageBytes);
+    if (src == null) return null;
+    
+    src = img.invert(src);
+    return Uint8List.fromList(img.encodePng(src));
+  }
+}
+
+import 'dart:async';
+import 'package:flutter/services.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+
+class PrinterService {
+  
+  /// Get list of paired devices
+  /// Returns a list of [BluetoothInfo] which contains name and macAddress
+  Future<List<BluetoothInfo>> getBondedDevices() async {
+    try {
+      final List<BluetoothInfo> result = await PrintBluetoothThermal.pairedBluetooths;
+      return result;
+    } on PlatformException catch (e) {
+      print("Failed to get paired devices: $e");
+      return [];
+    }
+  }
+
+  /// Connect to a specific printer using its MAC Address
+  Future<bool> connect(String macAddress) async {
+    try {
+      final bool result = await PrintBluetoothThermal.connect(
+        macPrinterAddress: macAddress
+      );
+      return result;
+    } on PlatformException catch (e) {
+      print("Error connecting: $e");
+      return false;
+    }
+  }
+
+  /// Disconnect
+  Future<bool> disconnect() async {
+    try {
+      final bool result = await PrintBluetoothThermal.disconnect;
+      return result;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Check connection status
+  Future<bool> get isConnected async {
+    try {
+      return await PrintBluetoothThermal.connectionStatus;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Send raw bytes to the printer
+  Future<bool> sendRawCommands(List<int> commands) async {
+    try {
+      bool connected = await isConnected;
+      if (connected) {
+        // print_bluetooth_thermal handles the chunking and types internally
+        final bool result = await PrintBluetoothThermal.writeBytes(commands);
+        return result;
+      } else {
+        print("Printer not connected");
+        return false;
+      }
+    } catch (e) {
+      print("Error sending commands: $e");
+      return false;
+    }
+  }
+}
+
+import 'package:image/image.dart' as img;
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+
+class CommandGenerator {
+  
+  // Strategy 1: Standard ESC/POS (GS v 0)
+  Future<List<int>> getGraphics_GS_v_0(img.Image src) async {
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(PaperSize.mm58, profile);
+    // esc_pos_utils uses GS v 0 by default for imageRaster
+    return generator.imageRaster(src, align: PosAlign.center);
+  }
+
+  // Strategy 2: ESC * 33 (Bit image mode for older Epson/Generic)
+  Future<List<int>> getGraphics_ESC_Star(img.Image src) async {
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(PaperSize.mm58, profile);
+    // While the library defaults to GS v 0, you can manually implement ESC *
+    // or use the generator.image() method which tries to adapt.
+    // Real implementation requires manual bit manipulation here.
+    return generator.image(src); 
+  }
+
+  // Strategy 3: Text Printing
+  Future<List<int>> getText(String text) async {
+    final profile = await CapabilityProfile.load();
+    final generator = Generator(PaperSize.mm58, profile);
+    return generator.text(text);
+  }
+}
+
+import 'dart:typed_data';
+
+class RawCommands {
+  
+  // RESET Printer (ESC @)
+  static List<int> reset() => [0x1B, 0x40];
+
+  // FEED Lines (ESC d n)
+  static List<int> feed(int lines) => [0x1B, 0x64, lines];
+
+  // CUT Paper (GS V 66 0)
+  static List<int> cut() => [0x1D, 0x56, 66, 0];
+
+  /**
+   * PROTOCOL: GS v 0 (Raster Bit Image)
+   * This is the standard for most modern thermal printers.
+   * Bytes: 0x1D 0x76 0x30 0x00 xL xH yL yH [data]
+   * * xL, xH = width in bytes (width / 8)
+   * yL, yH = height in dots
+   */
+  static List<int> command_GS_v_0(List<int> imageBytes, int width, int height) {
+    List<int> cmd = [];
+    cmd.addAll([0x1D, 0x76, 0x30, 0x00]); // Header
+    
+    // Calculate dimensions
+    int bytesWidth = (width + 7) ~/ 8;
+    cmd.add(bytesWidth % 256); // xL
+    cmd.add(bytesWidth ~/ 256); // xH
+    cmd.add(height % 256);      // yL
+    cmd.add(height ~/ 256);     // yH
+    
+    cmd.addAll(imageBytes);
+    return cmd;
+  }
+
+  /**
+   * PROTOCOL: ESC * 33 (Double Density Bit Image)
+   * Compatible with older Epson and some Star printers
+   * Bytes: 0x1B 0x2A 33 nL nH [data]
+   */
+  static List<int> command_ESC_Star_33(List<int> imageColumnBytes, int width) {
+    List<int> cmd = [];
+    cmd.addAll([0x1B, 0x2A, 33]);
+    
+    cmd.add(width % 256); // nL
+    cmd.add(width ~/ 256); // nH
+    
+    cmd.addAll(imageColumnBytes);
+    return cmd;
+  }
+}
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:share_handler/share_handler.dart'; 
+import 'pages/home_page.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatefulWidget {
+  const MyApp({Key? key}) : super(key: key);
+
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  StreamSubscription<SharedMedia>? _streamSubscription;
+  
+  // We only need to store the path of the single file we want to print
+  String? _sharedFilePath;
+
+  @override
+  void initState() {
+    super.initState();
+    _initShareListener();
+  }
+
+  void _initShareListener() async {
+    final handler = ShareHandler.instance;
+
+    // 1. Listen for files shared when the app is CLOSED (Cold Start)
+    try {
+      final SharedMedia? initialMedia = await handler.getInitialSharedMedia();
+      if (initialMedia != null) {
+        _processShareResult(initialMedia, "Cold Start");
+      }
+    } catch (e) {
+      print("Error fetching initial share: $e");
+    }
+
+    // 2. Listen for files shared while the app is ALREADY OPEN (Background)
+    _streamSubscription = handler.sharedMediaStream.listen((SharedMedia media) {
+      _processShareResult(media, "Background Stream");
+    });
+  }
+
+  void _processShareResult(SharedMedia media, String source) {
+    // FIX: Safely access the attachments list
+    final attachments = media.attachments;
+
+    if (attachments != null && attachments.isNotEmpty) {
+      // FIX: Access the first attachment safely using '?'
+      final firstAttachment = attachments.first;
+      
+      // FIX: Only access .path if firstAttachment is not null
+      final path = firstAttachment?.path;
+
+      if (path != null && path.isNotEmpty) {
+        setState(() {
+          _sharedFilePath = path;
+        });
+        print("Received file via Share ($source): $path");
+      }
+    } 
+    // Check if it's just text (e.g. sharing a link or plain text)
+    else if (media.content != null && media.content!.isNotEmpty) {
+      print("Received Text ($source): ${media.content}");
+    }
+  }
+
+  @override
+  void dispose() {
+    _streamSubscription?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'e-Pos Printer Services',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: false, 
+      ),
+      // We pass the captured file path to HomePage
+      home: HomePage(
+        // The 'key' forces the HomePage to reload if a new file comes in
+        key: _sharedFilePath != null ? ValueKey(_sharedFilePath) : null,
+        sharedFilePath: _sharedFilePath
+      ),
+    );
+  }
+}
+
+give me the full updated code.

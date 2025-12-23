@@ -1,0 +1,95 @@
+Dart SDK 3.10.3
+Flutter SDK 3.38.4
+epos_print_plugin 1.0.0+1
+
+dependencies:
+- cupertino_icons 1.0.8
+- esc_pos_utils_plus 2.0.4 [flutter image html]
+- flutter 0.0.0 [characters collection material_color_utilities meta vector_math sky_engine]
+- flutter_bluetooth_serial 0.4.0 [flutter]
+- image 4.5.4 [archive meta xml]
+- image_picker 1.2.1 [flutter image_picker_android image_picker_for_web image_picker_ios image_picker_linux image_picker_macos image_picker_platform_interface image_picker_windows]
+- network_info_plus 7.0.0 [collection nm flutter flutter_web_plugins meta network_info_plus_platform_interface win32 ffi]
+- permission_handler 12.0.1 [flutter meta permission_handler_android permission_handler_apple permission_handler_html permission_handler_windows permission_handler_platform_interface]
+- ping_discover_network_forked 0.0.1 [flutter]
+- print_bluetooth_thermal 1.1.9 [flutter flutter_web_plugins image plugin_platform_interface win_ble]
+- provider 6.1.5+1 [collection flutter nested]
+- receive_sharing_intent 1.8.1 [flutter plugin_platform_interface]
+- usb_serial 0.5.2 [flutter async collection]
+
+dev dependencies:
+- flutter_lints 6.0.0 [lints]
+- flutter_test 0.0.0 [flutter test_api matcher path fake_async clock stack_trace vector_math leak_tracker_flutter_testing collection meta stream_channel]
+
+transitive dependencies:
+- archive 4.0.7 [crypto path posix]
+- args 2.7.0
+- async 2.13.0 [collection meta]
+- boolean_selector 2.1.2 [source_span string_scanner]
+- characters 1.4.0
+- clock 1.1.2
+- collection 1.19.1
+- cross_file 0.3.5+1 [meta web]
+- crypto 3.0.7 [typed_data]
+- csslib 1.0.2 [source_span]
+- dbus 0.7.11 [args ffi meta xml]
+- fake_async 1.3.3 [clock collection]
+- ffi 2.1.4
+- file_selector_linux 0.9.4 [cross_file file_selector_platform_interface flutter]
+- file_selector_macos 0.9.5 [cross_file file_selector_platform_interface flutter]
+- file_selector_platform_interface 2.7.0 [cross_file flutter http plugin_platform_interface]
+- file_selector_windows 0.9.3+5 [cross_file file_selector_platform_interface flutter]
+- flutter_plugin_android_lifecycle 2.0.33 [flutter]
+- flutter_web_plugins 0.0.0 [flutter]
+- html 0.15.6 [csslib source_span]
+- http 1.6.0 [async http_parser meta web]
+- http_parser 4.1.2 [collection source_span string_scanner typed_data]
+- image_picker_android 0.8.13+10 [flutter flutter_plugin_android_lifecycle image_picker_platform_interface]
+- image_picker_for_web 3.1.1 [flutter flutter_web_plugins image_picker_platform_interface mime web]
+- image_picker_ios 0.8.13+3 [flutter image_picker_platform_interface]
+- image_picker_linux 0.2.2 [file_selector_linux file_selector_platform_interface flutter image_picker_platform_interface]
+- image_picker_macos 0.2.2+1 [file_selector_macos file_selector_platform_interface flutter image_picker_platform_interface]
+- image_picker_platform_interface 2.11.1 [cross_file flutter http plugin_platform_interface]
+- image_picker_windows 0.2.2 [file_selector_platform_interface file_selector_windows flutter image_picker_platform_interface]
+- leak_tracker 11.0.2 [clock collection meta path vm_service]
+- leak_tracker_flutter_testing 3.0.10 [flutter leak_tracker leak_tracker_testing matcher meta]
+- leak_tracker_testing 3.0.2 [leak_tracker matcher meta]
+- lints 6.0.0
+- matcher 0.12.17 [async meta stack_trace term_glyph test_api]
+- material_color_utilities 0.11.1 [collection]
+- meta 1.17.0
+- mime 2.0.0
+- nested 1.0.0 [flutter]
+- network_info_plus_platform_interface 2.0.2 [flutter meta plugin_platform_interface]
+- nm 0.5.0 [dbus]
+- path 1.9.1
+- path_provider 2.1.5 [flutter path_provider_android path_provider_foundation path_provider_linux path_provider_platform_interface path_provider_windows]
+- path_provider_android 2.2.22 [flutter path_provider_platform_interface]
+- path_provider_foundation 2.5.1 [flutter path_provider_platform_interface]
+- path_provider_linux 2.2.1 [ffi flutter path path_provider_platform_interface xdg_directories]
+- path_provider_platform_interface 2.1.2 [flutter platform plugin_platform_interface]
+- path_provider_windows 2.3.0 [ffi flutter path path_provider_platform_interface]
+- permission_handler_android 13.0.1 [flutter permission_handler_platform_interface]
+- permission_handler_apple 9.4.7 [flutter permission_handler_platform_interface]
+- permission_handler_html 0.1.3+5 [flutter flutter_web_plugins permission_handler_platform_interface web]
+- permission_handler_platform_interface 4.3.0 [flutter meta plugin_platform_interface]
+- permission_handler_windows 0.2.1 [flutter permission_handler_platform_interface]
+- petitparser 7.0.1 [meta collection]
+- platform 3.1.6
+- plugin_platform_interface 2.1.8 [meta]
+- posix 6.0.3 [ffi meta path]
+- sky_engine 0.0.0
+- source_span 1.10.1 [collection path term_glyph]
+- stack_trace 1.12.1 [path]
+- stream_channel 2.1.4 [async]
+- string_scanner 1.4.1 [source_span]
+- term_glyph 1.2.2
+- test_api 0.7.7 [async boolean_selector collection meta source_span stack_trace stream_channel string_scanner term_glyph]
+- typed_data 1.4.0 [collection]
+- vector_math 2.2.0
+- vm_service 15.0.2
+- web 1.1.1
+- win32 5.15.0 [ffi]
+- win_ble 1.1.1 [flutter path_provider]
+- xdg_directories 1.1.0 [meta path]
+- xml 6.6.1 [collection meta petitparser]

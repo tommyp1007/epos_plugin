@@ -1,0 +1,79 @@
+name: epos_print_plugin
+description: "A new Flutter project."
+publish_to: 'none' 
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ------------------------------------------------
+  # State Management
+  # ------------------------------------------------
+  provider: ^6.1.2
+
+  # ------------------------------------------------
+  # Printing & Document Generation
+  # ------------------------------------------------
+  printing: ^5.14.2              # Standard printing & PDF preview
+  pdf: ^3.11.3                   # PDF creation
+  esc_pos_utils_plus: ^2.0.0     # Generate ESC/POS commands (Thermal)
+  print_bluetooth_thermal: ^1.1.9 # Bluetooth thermal specific
+
+  # ------------------------------------------------
+  # Connectivity (Bluetooth, Network, USB)
+  # ------------------------------------------------
+  flutter_blue_plus: ^1.32.0     # BLE connectivity
+  flutter_bluetooth_serial: ^0.4.0 # BLE and Classic connectivity
+  usb_serial: ^0.5.0             # USB OTG connection
+  network_info_plus: ^7.0.0      # WiFi IP discovery
+  ping_discover_network_forked: ^0.0.1 # Scan network ports (9100)
+
+  # ------------------------------------------------
+  # System, Storage & Permissions
+  # ------------------------------------------------
+  permission_handler: ^12.0.1    # Handle Android/iOS permissions
+  device_info_plus: ^12.3.0      # Get Android/iOS version info
+  shared_preferences: ^2.5.4     # Local storage (Settings)
+  share_handler: ^0.0.25         # Appear in "Share" intent menus
+
+  # ------------------------------------------------
+  # Media & Image Processing
+  # ------------------------------------------------
+  image: ^4.0.0                  # Image processing (encoding/decoding)
+  image_picker: ^1.2.1           # Pick images from Gallery/Camera
+
+  # ------------------------------------------------
+  # UI & Assets
+  # ------------------------------------------------
+  cupertino_icons: ^1.0.8        # iOS style icons
+  webview_flutter: ^4.13.0       # Render web content
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  
+  flutter_lints: ^6.0.0
+
+  # Tool to generate App Icons
+  flutter_launcher_icons: ^0.13.1
+
+# ------------------------------------------------
+# Configuration for App Icons
+# ------------------------------------------------
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/icon.png"
+  min_sdk_android: 21 # Optional: ensures support for adaptive icons
+
+flutter:
+  uses-material-design: true
+
+  # Ensure your icon asset is declared here if you use it inside the app UI too
+  assets:
+    - assets/images/
