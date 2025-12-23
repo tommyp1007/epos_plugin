@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io'; // Required for Platform checks
 
 import 'package:flutter/material.dart';
-import 'package:share_handler/share_handler.dart';
+import 'package:zikzak_share_handler/zikzak_share_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:provider/provider.dart'; // 1. IMPORT PROVIDER

@@ -728,38 +728,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.28.0"
-  share_handler:
-    dependency: "direct main"
-    description:
-      name: share_handler
-      sha256: "0a6d007f0e44fbee27164adcd159ecbc88238864313f4e5c58161cae2180328d"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.25"
-  share_handler_android:
-    dependency: transitive
-    description:
-      name: share_handler_android
-      sha256: caf555b933dc72783aa37fef75688c7b86bd6f7bc17d80fbf585bc42f123cc8d
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.11"
-  share_handler_ios:
-    dependency: transitive
-    description:
-      name: share_handler_ios
-      sha256: cdc21f88f336a944157a8e9ceb191525cee3b082d6eb6c2082488e4f09dc3ece
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.15"
-  share_handler_platform_interface:
-    dependency: transitive
-    description:
-      name: share_handler_platform_interface
-      sha256: "7a4df95a87b326b2f07458d937f2281874567c364b7b7ebe4e7d50efaae5f106"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.6"
   shared_preferences:
     dependency: "direct main"
     description:
@@ -989,6 +957,38 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.3"
+  zikzak_share_handler:
+    dependency: "direct main"
+    description:
+      name: zikzak_share_handler
+      sha256: "60426216a6be36063de0474e498e7e55a37fb5b0e67efa91fcdfa537fb373ef6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.30"
+  zikzak_share_handler_android:
+    dependency: transitive
+    description:
+      name: zikzak_share_handler_android
+      sha256: d331444e32e1b1ed577d25887051dcc0539cad991bf971609ec6469d46ff8f27
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.12"
+  zikzak_share_handler_ios:
+    dependency: transitive
+    description:
+      name: zikzak_share_handler_ios
+      sha256: df38cc6e7d500074ab9dae62d495f82c2fd9d4d9bde9592cfd716d1b6f9a4f2c
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.17"
+  zikzak_share_handler_platform_interface:
+    dependency: transitive
+    description:
+      name: zikzak_share_handler_platform_interface
+      sha256: f403134187ac26abe150f0e6adf0f9c1b09d2b8558d7b2cffe305d0ae0f13ef0
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.7"
 sdks:
   dart: ">=3.10.3 <4.0.0"
   flutter: ">=3.35.0"
