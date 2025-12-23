@@ -78,8 +78,8 @@ class MyPrintService : PrintService() {
                 val mediaSunmi58 = MediaSize("SUNMI_58", "58mm (Small)", 2280, 50000)
                 val mediaSunmi80 = MediaSize("SUNMI_80", "80mm (Large)", 3150, 50000)
                 
-                // --- CUSTOM SETTING: "e-Pos System Setting" ---
-                val mediaEpos = MediaSize("EPOS_SETTING", "e-Pos System Setting", 8270, 11690)
+                // --- CUSTOM SETTING: "My-Invois e-Pos Printer" ---
+                val mediaEpos = MediaSize("EPOS_SETTING", "My-Invois e-Pos Printer", 8270, 11690)
                 val res203 = Resolution("R203", "Standard (203 dpi)", 203, 203)
 
                 fun addBluetoothPrinters() {
@@ -117,7 +117,7 @@ class MyPrintService : PrintService() {
                                 }
                                 
                                 // --- DEFAULT MEDIA SETTING ---
-                                // Set "e-Pos System Setting" as DEFAULT (true)
+                                // Set "My-Invois e-Pos Printer" as DEFAULT (true)
                                 capsBuilder.addMediaSize(mediaEpos, true)
                                 
                                 capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)

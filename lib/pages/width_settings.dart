@@ -1,3 +1,4 @@
+import 'dart:io'; // Required for Platform checks
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -16,7 +17,7 @@ class _WidthSettingsState extends State<WidthSettings> {
   // Default to 384 dots (Sunmi 58mm standard @ 203dpi)
   int _selectedDpi = 203;
   final TextEditingController _widthController = TextEditingController(text: "384");
-  
+   
   String _detectedModelInfo = "";
   bool _canAutoDetect = false;
 
@@ -27,15 +28,23 @@ class _WidthSettingsState extends State<WidthSettings> {
     _checkAutoDetectCapability();
   }
 
-  // LOGIC: Only enable Auto Detect if the connected device is "InnerPrinter"
+  // LOGIC: Check if we can run auto-detect based on Platform and connection
   void _checkAutoDetectCapability() {
     String name = widget.connectedDeviceName ?? "";
     
-    // You can adjust this condition if your internal printer has a slightly different name
-    if (name.toLowerCase().contains("innerprinter")) {
+    // Auto-detect relies on reading internal hardware info, which is:
+    // 1. Only reliably available on Android
+    // 2. Only relevant if using the "InnerPrinter"
+    
+    if (Platform.isAndroid && name.toLowerCase().contains("innerprinter")) {
       setState(() {
         _canAutoDetect = true;
         _detectedModelInfo = "Internal Printer detected. Auto-detect available.";
+      });
+    } else if (Platform.isIOS) {
+       setState(() {
+        _canAutoDetect = false;
+        _detectedModelInfo = "iOS Device: Please select paper size manually.";
       });
     } else {
       setState(() {
@@ -77,8 +86,11 @@ class _WidthSettingsState extends State<WidthSettings> {
     }
   }
 
-  // --- AUTO DETECT HANDLER (Only runs for InnerPrinter) ---
+  // --- AUTO DETECT HANDLER (Only runs for InnerPrinter on Android) ---
   Future<void> _handleAutoDetect() async {
+    // Safety check: Don't run this on iOS
+    if (!Platform.isAndroid) return;
+
     final deviceInfo = DeviceInfoPlugin();
     try {
       AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
@@ -95,8 +107,11 @@ class _WidthSettingsState extends State<WidthSettings> {
         } else {
           _updateWidthField(384, "Detected Sunmi 58mm ($model)");
         }
+      } else if (manufacturer.contains("HUAWEI") || manufacturer.contains("HONOR")) {
+         // Huawei generic fallback (most handhelds are 58mm)
+         _updateWidthField(384, "Detected Huawei Device. Defaulting to 58mm.");
       } else {
-        // If it's InnerPrinter but not Sunmi, default to 58mm or show dialog
+        // If it's InnerPrinter but not recognized, default to 58mm
         _updateWidthField(384, "Unknown Internal Device. Defaulting to 58mm.");
       }
     } catch (e) {
@@ -191,6 +206,7 @@ class _WidthSettingsState extends State<WidthSettings> {
                   SizedBox(
                     height: 55,
                     child: ElevatedButton.icon(
+                      // Disable button if not Android or not InnerPrinter
                       onPressed: _canAutoDetect ? _handleAutoDetect : null, 
                       icon: const Icon(Icons.perm_device_information),
                       label: const Text("AUTO\nDETECT"),

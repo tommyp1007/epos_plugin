@@ -3,9 +3,25 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // Required for iOS
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/printer_service.dart';
+
+/// A simple wrapper to unify Android (Classic) and iOS (BLE) results
+class UniversalBluetoothDevice {
+  final String name;
+  final String address; // MAC for Android, UUID for iOS
+  final int rssi;
+  final bool isBonded; // Only relevant for Android
+
+  UniversalBluetoothDevice({
+    required this.name,
+    required this.address,
+    required this.rssi,
+    this.isBonded = false,
+  });
+}
 
 class ScanDevicesPage extends StatefulWidget {
   const ScanDevicesPage({Key? key}) : super(key: key);
@@ -16,9 +32,16 @@ class ScanDevicesPage extends StatefulWidget {
 
 class _ScanDevicesPageState extends State<ScanDevicesPage> {
   final PrinterService _printerService = PrinterService();
-  List<BluetoothDiscoveryResult> _scanResults = [];
+  
+  // Unified list for display
+  List<UniversalBluetoothDevice> _scanResults = [];
   bool _isScanning = false;
-  StreamSubscription<BluetoothDiscoveryResult>? _scanSubscription;
+
+  // Android specific subscription
+  StreamSubscription<BluetoothDiscoveryResult>? _androidScanSubscription;
+  
+  // iOS specific subscription
+  StreamSubscription<List<ScanResult>>? _iosScanSubscription;
 
   @override
   void initState() {
@@ -34,63 +57,148 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
   Future<void> _checkPermissions() async {
     if (Platform.isAndroid) {
-      await [Permission.bluetooth, Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
+      // Android 12+ requires specific bluetooth permissions
+      await [
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location, // Critical for detection on older Android/Huawei
+      ].request();
+    } else if (Platform.isIOS) {
+      // iOS requires basic bluetooth permission
+      await [
+        Permission.bluetooth,
+      ].request();
     }
   }
 
   Future<void> _startScan() async {
     if (_isScanning) return;
-    setState(() { _scanResults = []; _isScanning = true; });
+    
+    // Reset list and state
+    setState(() {
+      _scanResults = [];
+      _isScanning = true;
+    });
 
     try {
-      _scanSubscription = FlutterBluetoothSerial.instance.startDiscovery().listen((result) {
-        if (mounted) {
-          setState(() {
-            if (result.device.name != null && result.device.name!.isNotEmpty) {
-              final existingIndex = _scanResults.indexWhere((r) => r.device.address == result.device.address);
-              if (existingIndex >= 0) {
-                _scanResults[existingIndex] = result; 
-              } else {
-                _scanResults.add(result);
+      if (Platform.isAndroid) {
+        // --- ANDROID LOGIC (Classic Bluetooth) ---
+        _androidScanSubscription = FlutterBluetoothSerial.instance.startDiscovery().listen((result) {
+          if (mounted) {
+            setState(() {
+              // Filter out empty names for cleaner UI
+              if (result.device.name != null && result.device.name!.isNotEmpty) {
+                final device = UniversalBluetoothDevice(
+                  name: result.device.name!,
+                  address: result.device.address,
+                  rssi: result.rssi,
+                  isBonded: result.device.isBonded,
+                );
+
+                // Update or Add
+                final index = _scanResults.indexWhere((r) => r.address == device.address);
+                if (index >= 0) {
+                  _scanResults[index] = device;
+                } else {
+                  _scanResults.add(device);
+                }
+                // Sort by signal strength
+                _scanResults.sort((a, b) => b.rssi.compareTo(a.rssi));
               }
-              _scanResults.sort((a, b) => b.rssi.compareTo(a.rssi));
-            }
-          });
+            });
+          }
+        });
+
+      } else if (Platform.isIOS) {
+        // --- iOS LOGIC (BLE) ---
+        // Check if Bluetooth is On
+        if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
+            _showSnackBar("Please turn on Bluetooth");
+            _stopScan();
+            return;
         }
-      });
+
+        await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+
+        _iosScanSubscription = FlutterBluePlus.scanResults.listen((results) {
+          if (mounted) {
+            setState(() {
+              _scanResults = results
+                  .where((r) => r.device.platformName.isNotEmpty) // BLE devices often have empty names
+                  .map((r) => UniversalBluetoothDevice(
+                        name: r.device.platformName,
+                        address: r.device.remoteId.str, // iOS uses UUID, not MAC
+                        rssi: r.rssi,
+                        isBonded: false, // iOS handles bonding internally
+                      ))
+                  .toList();
+               _scanResults.sort((a, b) => b.rssi.compareTo(a.rssi));
+            });
+          }
+        });
+      }
+
+      // Auto-stop after 15 seconds
       await Future.delayed(const Duration(seconds: 15));
       if (_isScanning) _stopScan();
+
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Scan Error: $e")));
+      if (mounted) _showSnackBar("Scan Error: $e");
+      _stopScan();
     }
   }
 
   Future<void> _stopScan() async {
-    await _scanSubscription?.cancel();
-    await FlutterBluetoothSerial.instance.cancelDiscovery();
+    if (Platform.isAndroid) {
+      await _androidScanSubscription?.cancel();
+      await FlutterBluetoothSerial.instance.cancelDiscovery();
+    } else if (Platform.isIOS) {
+      await _iosScanSubscription?.cancel();
+      await FlutterBluePlus.stopScan();
+    }
+    
     if (mounted) setState(() => _isScanning = false);
   }
 
-  Future<void> _pairAndConnect(BluetoothDiscoveryResult result) async {
+  Future<void> _pairAndConnect(UniversalBluetoothDevice device) async {
     await _stopScan();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pairing with ${result.device.name}...")));
+    
+    _showSnackBar("Connecting to ${device.name}...");
+
     try {
-      bool paired = await FlutterBluetoothSerial.instance.bondDeviceAtAddress(result.device.address) ?? false;
-      if (!paired) {
-         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Pairing failed.")));
-         return;
+      bool success = false;
+
+      if (Platform.isAndroid) {
+        // Android: Needs explicit Bonding for Classic Bluetooth
+        if (!device.isBonded) {
+          bool? bonded = await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
+          if (bonded != true) {
+            _showSnackBar("Pairing failed.");
+            return;
+          }
+        }
+        success = await _printerService.connect(device.address);
+      } else if (Platform.isIOS) {
+        // iOS: Connect directly (Bonding/Pairing is handled by OS dialogs if needed)
+        // Note: printerService must support connecting via UUID for iOS
+        success = await _printerService.connect(device.address);
       }
-      bool success = await _printerService.connect(result.device.address);
+
       if (mounted) {
         if (success) {
-          Navigator.pop(context, result.device.address); 
+          Navigator.pop(context, device.address); // Return the ID/MAC
         } else {
-          Navigator.pop(context, true);
+          _showSnackBar("Connection failed.");
         }
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      if (mounted) _showSnackBar("Error: $e");
     }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -109,27 +217,49 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
                   const SizedBox(height: 10),
                   OutlinedButton(onPressed: _stopScan, child: const Text("STOP SCAN"))
                 ] else ...[
-                  SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.bluetooth_searching), label: const Text("SCAN DEVICES"), onPressed: _startScan)),
+                  SizedBox(
+                    width: double.infinity, 
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.bluetooth_searching), 
+                      label: const Text("SCAN DEVICES"), 
+                      onPressed: _startScan
+                    )
+                  ),
                 ],
+                const SizedBox(height: 5),
+                Text(
+                  Platform.isIOS 
+                      ? "Note: iOS searches for BLE Printers." 
+                      : "Note: Android searches for Classic Bluetooth.",
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                )
               ],
             ),
           ),
           Expanded(
             child: _scanResults.isEmpty
-                ? Center(child: Text(_isScanning ? "Scanning..." : "No devices found"))
+                ? Center(
+                    child: Text(_isScanning ? "Scanning..." : "No devices found"),
+                  )
                 : ListView.builder(
                     itemCount: _scanResults.length,
                     itemBuilder: (context, index) {
-                      final result = _scanResults[index];
-                      final device = result.device;
+                      final device = _scanResults[index];
                       return Card(
                         child: ListTile(
-                          leading: Icon(Icons.print, color: Colors.blueGrey),
-                          title: Text(device.name ?? "Unknown"),
-                          subtitle: Text("${device.address}\nRSSI: ${result.rssi}"),
+                          leading: const Icon(Icons.print, color: Colors.blueGrey),
+                          title: Text(device.name),
+                          subtitle: Text("${device.address}\nSignal: ${device.rssi}"),
                           trailing: ElevatedButton(
-                            onPressed: device.isBonded ? null : () => _pairAndConnect(result),
-                            child: Text(device.isBonded ? "PAIRED" : "PAIR"),
+                            // On iOS we just say "Connect", on Android we distinguish Pair vs Paired
+                            onPressed: (Platform.isAndroid && device.isBonded) 
+                                ? null 
+                                : () => _pairAndConnect(device),
+                            child: Text(
+                              Platform.isAndroid 
+                                  ? (device.isBonded ? "PAIRED" : "PAIR") 
+                                  : "CONNECT"
+                            ),
                           ),
                         ),
                       );

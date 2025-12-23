@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io'; // Required for Platform checks
 import 'package:flutter/material.dart';
 import 'package:share_handler/share_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,50 +44,54 @@ class _MyAppState extends State<MyApp> {
       String? currentWidthMode = prefs.getString('printer_width_mode');
 
       if (currentWidthMode == null) {
-        // 2. No setting found. Let's auto-detect the device.
-        final deviceInfo = DeviceInfoPlugin();
-        AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-        
-        String manufacturer = androidInfo.manufacturer.toUpperCase();
-        String model = androidInfo.model.toUpperCase();
+        // 2. No setting found. Let's auto-detect.
+        String detectedMode = "58"; // Default fallback
 
-        String detectedMode = "58"; // Default to 58mm
-
-        // 3. Logic for Sunmi Devices
-        if (manufacturer.contains("SUNMI")) {
-          // List of known 80mm models
-          List<String> models80mm = ["V3", "V3 MIX", "T2", "T2S", "T1", "K2", "T5711"];
+        // --- ANDROID DETECTION LOGIC ---
+        if (Platform.isAndroid) {
+          final deviceInfo = DeviceInfoPlugin();
+          AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
           
-          bool is80mm = false;
-          for (var m in models80mm) {
-            if (model.contains(m)) {
-              is80mm = true;
-              break;
+          String manufacturer = androidInfo.manufacturer.toUpperCase();
+          String model = androidInfo.model.toUpperCase();
+
+          // 3. Logic for Sunmi Devices
+          if (manufacturer.contains("SUNMI")) {
+            // List of known 80mm models
+            List<String> models80mm = ["V3", "V3 MIX", "T2", "T2S", "T1", "K2", "T5711"];
+            
+            bool is80mm = false;
+            for (var m in models80mm) {
+              if (model.contains(m)) {
+                is80mm = true;
+                break;
+              }
             }
-          }
 
-          if (is80mm) {
-            detectedMode = "80";
-            print("Auto-Config: Detected Sunmi 80mm Device ($model). Setting mode to 80.");
-          } else {
-            detectedMode = "58"; // V2, P2, etc.
-            print("Auto-Config: Detected Sunmi 58mm Device ($model). Setting mode to 58.");
-          }
+            if (is80mm) {
+              detectedMode = "80";
+              print("Auto-Config: Detected Sunmi 80mm Device ($model). Setting mode to 80.");
+            } else {
+              detectedMode = "58"; // V2, P2, etc.
+              print("Auto-Config: Detected Sunmi 58mm Device ($model). Setting mode to 58.");
+            }
 
-          // 4. Save Settings for Native Service
-          // The native service listens for 'flutter.printer_width_mode'
-          await prefs.setString('printer_width_mode', detectedMode);
-          
-          // Set default printer to INNER so native service picks it up immediately
-          if (prefs.getString('selected_printer_mac') == null) {
-             // If detected as Sunmi, assume Inner Printer (using "INNER" or "sunmi_virtual" logic)
-             // Using "INNER" allows your Connection Manager to map it correctly.
-             await prefs.setString('selected_printer_mac', "INNER");
-          }
-        } else {
-           // Non-Sunmi Device (Generic Android)
-           await prefs.setString('printer_width_mode', "58");
+            // Set default printer to INNER so native service picks it up immediately
+            if (prefs.getString('selected_printer_mac') == null) {
+               await prefs.setString('selected_printer_mac', "INNER");
+            }
+          } 
+        } 
+        // --- IOS DETECTION LOGIC ---
+        else if (Platform.isIOS) {
+           // iOS doesn't support internal POS printers generally.
+           // We default to standard 58mm for safety unless user changes it.
+           detectedMode = "58";
+           print("Auto-Config: iOS Device detected. Defaulting to 58mm.");
         }
+
+        // 4. Save Settings for Native Service
+        await prefs.setString('printer_width_mode', detectedMode);
       }
     } catch (e) {
       print("Error during startup device detection: $e");

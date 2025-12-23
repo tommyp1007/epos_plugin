@@ -4,14 +4,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart'; 
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../services/printer_service.dart';
-import 'width_settings.dart'; 
+import 'width_settings.dart';
 import 'scan_devices.dart';
 
 class HomePage extends StatefulWidget {
@@ -27,7 +27,7 @@ class _HomePageState extends State<HomePage> {
 
   List<BluetoothInfo> _pairedDevices = [];
   BluetoothInfo? _selectedPairedDevice;
-  String? _connectedMac; 
+  String? _connectedMac;
   bool _isLoadingPaired = false;
   bool _isConnecting = false;
 
@@ -38,41 +38,62 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _checkPermissions() async {
+    // 1. Android & Huawei (Android-based) Permissions
     if (Platform.isAndroid) {
+      // requesting all relevant permissions for both old (Location) 
+      // and new (Scan/Connect) Android versions.
       await [
         Permission.bluetooth,
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-        Permission.location,
+        Permission.location, // Critical for scanning on older Android & Huawei
+      ].request();
+    } 
+    // 2. Apple iOS Permissions
+    else if (Platform.isIOS) {
+      // iOS requires Bluetooth permission explicitly
+      await [
+        Permission.bluetooth,
       ].request();
     }
+    
+    // After permissions are handled, load devices
     _loadBondedDevices();
   }
 
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
     try {
+      // Note: "Bonded" devices are primarily an Android concept. 
+      // On iOS, this list might be empty, requiring the user to use "Search for Devices".
       List<BluetoothInfo> devices = await _printerService.getBondedDevices();
-      setState(() {
-        _pairedDevices = devices;
-        if (devices.isNotEmpty) {
-          if (autoSelectMac != null) {
-            try {
-              _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
-            } catch (e) {
-              _selectedPairedDevice = devices.first;
+      
+      if (mounted) {
+        setState(() {
+          _pairedDevices = devices;
+          if (devices.isNotEmpty) {
+            if (autoSelectMac != null) {
+              try {
+                _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
+              } catch (e) {
+                _selectedPairedDevice = devices.first;
+              }
+            } else {
+              if (_selectedPairedDevice == null) {
+                _selectedPairedDevice = devices.first;
+              }
             }
-          } else {
-             if (_selectedPairedDevice == null) {
-               _selectedPairedDevice = devices.first;
-             }
           }
-        }
-      });
+        });
+      }
     } catch (e) {
-      _showSnackBar("Error loading paired devices: $e");
+      // On iOS, getBondedDevices might throw an UnimplementedError or PlatformException.
+      // We catch it silently here so the app doesn't crash, allowing the user to use "Search".
+      debugPrint("Error loading bonded devices (Normal on iOS): $e");
     } finally {
-      setState(() => _isLoadingPaired = false);
+      if (mounted) {
+        setState(() => _isLoadingPaired = false);
+      }
     }
   }
 
@@ -107,7 +128,7 @@ class _HomePageState extends State<HomePage> {
         bool success = await _printerService.connect(selectedMac);
         
         if (success) {
-           // SAVE MAC ADDRESS: This allows Kotlin to know which printer to select by default
+           // SAVE MAC ADDRESS: This allows Kotlin/Native to know which printer to select by default
            await prefs.setString('selected_printer_mac', selectedMac); 
            
            if (mounted) {
@@ -220,6 +241,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _showSnackBar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
@@ -244,7 +266,7 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("e-Pos Printer Services"),
+        title: const Text("My-Invois e-Pos Printer"),
         actions: [
           IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => _loadBondedDevices())
@@ -265,6 +287,7 @@ class _HomePageState extends State<HomePage> {
                       DropdownButton<BluetoothInfo>(
                         isExpanded: true,
                         hint: const Text("Select a paired printer"),
+                        // Ensure the value matches exactly the object in the list
                         value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null && _pairedDevices.contains(_selectedPairedDevice)) 
                             ? _selectedPairedDevice 
                             : null,

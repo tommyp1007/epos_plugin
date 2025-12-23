@@ -11,70 +11,108 @@ class BluetoothPrintService {
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _writeCharacteristic;
 
-  bool get isConnected => _connectedDevice != null && _connectedDevice!.isConnected;
+  /// Check connection status using the device's current state stream
+  bool get isConnected {
+    if (_connectedDevice == null) return false;
+    // Note: In newer FlutterBluePlus, we rely on tracking the state or using connectedDevices
+    return _connectedDevice!.isConnected; 
+  }
 
-  // 1. Request Permissions
+  // --- 1. Request Permissions (Updated for Android 12+ & iOS) ---
   Future<bool> requestPermissions() async {
-    // Android 12+ requires specific scan/connect permissions
     if (Platform.isAndroid) {
+      // Check for Android 12+ (SDK 31+)
+      // Note: We assume the app targets SDK 31+. 
+      // If permission_handler detects API < 31, requesting 'bluetoothScan' usually returns restricted/granted automatically.
+      
+      // We request all potential permissions. 
+      // On Android 12+, 'location' is not strictly needed for BLE if 'neverForLocation' is in manifest,
+      // but 'bluetoothScan' and 'bluetoothConnect' are mandatory.
       Map<Permission, PermissionStatus> statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-        Permission.location, // Required for BLE on older Androids
+        Permission.location, // Critical for detection on older Android (Huawei/Samsung)
       ].request();
-      return statuses.values.every((status) => status.isGranted);
+
+      // Logic: If Scan/Connect are granted (Android 12+) OR Location is granted (Android <12)
+      bool scanGranted = statuses[Permission.bluetoothScan]?.isGranted ?? false;
+      bool connectGranted = statuses[Permission.bluetoothConnect]?.isGranted ?? false;
+      bool locationGranted = statuses[Permission.location]?.isGranted ?? false;
+
+      // Simplistic check: generally if we have location (old) or scan+connect (new), we are good.
+      return (scanGranted && connectGranted) || locationGranted;
+    } else if (Platform.isIOS) {
+      // iOS 13+ requires Bluetooth permission
+      PermissionStatus status = await Permission.bluetooth.request();
+      return status.isGranted;
     }
-    return true; // iOS handles permissions via Info.plist mostly
+    return false;
   }
 
-  // 2. Scan for Devices (BLE)
-  // We return the stream of list results provided by the library
+  // --- 2. Scan for Devices (BLE) ---
   Stream<List<ScanResult>> get scanResults => FlutterBluePlus.scanResults;
 
   Future<void> startScan() async {
+    // Check if Bluetooth is actually On before scanning to avoid errors
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      throw Exception("Bluetooth is off");
+    }
     // Timeout ensures we don't drain battery
-    return FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+    return FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
   }
 
   Future<void> stopScan() async {
     return FlutterBluePlus.stopScan();
   }
 
-  // 3. Connect to a specific printer
+  // --- 3. Connect to a specific printer ---
   Future<bool> connect(BluetoothDevice device) async {
     try {
+      // Crucial for Android: Always stop scanning before connecting
+      await stopScan();
+
       if (_connectedDevice != null && _connectedDevice!.remoteId == device.remoteId) {
         return true; // Already connected
       }
 
-      await disconnect(); // Clean up old connection
-
       // Connect with auto-reconnect disabled for printers usually
-      await device.connect(autoConnect: false);
+      // mtu: null allows the OS to negotiate (important for iOS)
+      await device.connect(autoConnect: false, mtu: null);
       _connectedDevice = device;
 
       // 4. Discover Services & Find Write Characteristic
-      // BLE devices have "Services", inside services are "Characteristics".
-      // We need to find the one allowed to "Write".
       List<BluetoothService> services = await device.discoverServices();
       
+      // Reset characteristic
+      _writeCharacteristic = null;
+
       for (var service in services) {
         for (var characteristic in service.characteristics) {
-          if (characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+          // We look for a characteristic that allows writing.
+          // Printers usually have one specific characteristic for data.
+          if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
             _writeCharacteristic = characteristic;
+            // We found a candidate. Most printers only have one writable characteristic.
+            // If specific UUIDs are needed, check: characteristic.uuid.toString().contains("...")
             return true;
           }
         }
       }
       
+      if (_writeCharacteristic == null) {
+        throw Exception("No writable characteristic found on this device.");
+      }
+      
       return true;
     } catch (e) {
       print("Connection failed: $e");
+      // Cleanup if connection failed
+      disconnect();
       return false;
     }
   }
 
-  // 5. Disconnect
+  // --- 5. Disconnect ---
   Future<void> disconnect() async {
     if (_connectedDevice != null) {
       await _connectedDevice!.disconnect();
@@ -83,24 +121,45 @@ class BluetoothPrintService {
     }
   }
 
-  // 6. Send Bytes (With Chunking for BLE)
+  // --- 6. Send Bytes (With Chunking for BLE) ---
   Future<void> sendBytes(List<int> bytes) async {
     if (_connectedDevice == null || _writeCharacteristic == null) {
       throw Exception("Not connected or Write Characteristic not found");
     }
 
-    // BLE has a limit (MTU). We must split data into chunks (e.g., 100 bytes)
-    // or the printer will drop the data.
-    const int chunkSize = 100; 
+    // Determine the type of write (With Response is slower but more reliable, Without Response is faster)
+    // Thermal printers usually prefer 'WithoutResponse' for speed, but we must check if the device supports it.
+    final bool canWriteNoResponse = _writeCharacteristic!.properties.writeWithoutResponse;
+    final bool canWriteResponse = _writeCharacteristic!.properties.write;
+    
+    // Preference: NoResponse > Response
+    bool useWithoutResponse = canWriteNoResponse;
+    if (!canWriteNoResponse && canWriteResponse) {
+      useWithoutResponse = false;
+    }
+
+    // BLE has a limit (MTU). We must split data into chunks.
+    // Standard BLE MTU is often ~20 bytes, but can be negotiated higher. 
+    // 100-150 bytes is a safe middle ground for modern phones.
+    const int chunkSize = 150; 
+
     for (int i = 0; i < bytes.length; i += chunkSize) {
       int end = (i + chunkSize < bytes.length) ? i + chunkSize : bytes.length;
       List<int> chunk = bytes.sublist(i, end);
       
-      // writeWithoutResponse is faster and usually preferred for thermal printers
-      await _writeCharacteristic!.write(chunk, withoutResponse: true);
-      
-      // Small delay to prevent flooding the buffer
-      await Future.delayed(const Duration(milliseconds: 10)); 
+      try {
+        await _writeCharacteristic!.write(chunk, withoutResponse: useWithoutResponse);
+        
+        // Small delay is CRITICAL for Android to prevent buffer overflow
+        // iOS manages this better internally, but Android needs help.
+        int delay = Platform.isAndroid ? 15 : 5; 
+        await Future.delayed(Duration(milliseconds: delay)); 
+      } catch (e) {
+        print("Error writing chunk: $e");
+        // If 'withoutResponse' failed, try 'withResponse' as fallback?
+        // Usually better to just throw so UI knows printing failed.
+        throw e;
+      }
     }
   }
 }
