@@ -39,7 +39,7 @@ dependencies:
   permission_handler: ^12.0.1    # Handle Android/iOS permissions
   device_info_plus: ^12.3.0      # Get Android/iOS version info
   shared_preferences: ^2.5.4     # Local storage (Settings)
-  zikzak_share_handler: ^0.0.30        # Appear in "Share" intent menus
+  receive_sharing_intent: ^1.8.1       # Appear in "Share" intent menus
 
   # ------------------------------------------------
   # Media & Image Processing

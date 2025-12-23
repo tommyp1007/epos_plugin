@@ -720,6 +720,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.2"
+  receive_sharing_intent:
+    dependency: "direct main"
+    description:
+      name: receive_sharing_intent
+      sha256: ec76056e4d258ad708e76d85591d933678625318e411564dcb9059048ca3a593
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.8.1"
   rxdart:
     dependency: transitive
     description:
@@ -957,38 +965,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.3"
-  zikzak_share_handler:
-    dependency: "direct main"
-    description:
-      name: zikzak_share_handler
-      sha256: "60426216a6be36063de0474e498e7e55a37fb5b0e67efa91fcdfa537fb373ef6"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.30"
-  zikzak_share_handler_android:
-    dependency: transitive
-    description:
-      name: zikzak_share_handler_android
-      sha256: d331444e32e1b1ed577d25887051dcc0539cad991bf971609ec6469d46ff8f27
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.12"
-  zikzak_share_handler_ios:
-    dependency: transitive
-    description:
-      name: zikzak_share_handler_ios
-      sha256: df38cc6e7d500074ab9dae62d495f82c2fd9d4d9bde9592cfd716d1b6f9a4f2c
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.17"
-  zikzak_share_handler_platform_interface:
-    dependency: transitive
-    description:
-      name: zikzak_share_handler_platform_interface
-      sha256: f403134187ac26abe150f0e6adf0f9c1b09d2b8558d7b2cffe305d0ae0f13ef0
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.7"
 sdks:
   dart: ">=3.10.3 <4.0.0"
   flutter: ">=3.35.0"

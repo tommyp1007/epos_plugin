@@ -2,19 +2,17 @@ import 'dart:async';
 import 'dart:io'; // Required for Platform checks
 
 import 'package:flutter/material.dart';
-import 'package:zikzak_share_handler/zikzak_share_handler.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart'; // UPDATED IMPORT
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:provider/provider.dart'; // 1. IMPORT PROVIDER
+import 'package:provider/provider.dart';
 
-import 'services/language_service.dart'; // 2. IMPORT LANGUAGE SERVICE
+import 'services/language_service.dart';
 import 'pages/home_page.dart';
 
 void main() {
-  // Required for platform channels (ShareHandler, SharedPreferences, DeviceInfo)
   WidgetsFlutterBinding.ensureInitialized();
   
-  // 3. WRAP APP IN PROVIDER
   runApp(
     ChangeNotifierProvider(
       create: (context) => LanguageService(),
@@ -31,7 +29,8 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  StreamSubscription<SharedMedia>? _streamSubscription;
+  // UPDATED: StreamSubscription now listens to List<SharedMediaFile>
+  StreamSubscription<List<SharedMediaFile>>? _intentDataStreamSubscription;
   
   // We only need to store the path of the single file we want to print
   String? _sharedFilePath;
@@ -50,12 +49,9 @@ class _MyAppState extends State<MyApp> {
     try {
       final prefs = await SharedPreferences.getInstance();
       
-      // 1. Check if width is already configured
-      // Note: We use 'printer_width_mode' to match the Native Service (values: "58" or "80")
       String? currentWidthMode = prefs.getString('printer_width_mode');
 
       if (currentWidthMode == null) {
-        // 2. No setting found. Let's auto-detect.
         String detectedMode = "58"; // Default fallback
 
         // --- ANDROID DETECTION LOGIC ---
@@ -66,9 +62,7 @@ class _MyAppState extends State<MyApp> {
           String manufacturer = androidInfo.manufacturer.toUpperCase();
           String model = androidInfo.model.toUpperCase();
 
-          // 3. Logic for Sunmi Devices
           if (manufacturer.contains("SUNMI")) {
-            // List of known 80mm models
             List<String> models80mm = ["V3", "V3 MIX", "T2", "T2S", "T1", "K2", "T5711"];
             
             bool is80mm = false;
@@ -87,7 +81,6 @@ class _MyAppState extends State<MyApp> {
               print("Auto-Config: Detected Sunmi 58mm Device ($model). Setting mode to 58.");
             }
 
-            // Set default printer to INNER so native service picks it up immediately
             if (prefs.getString('selected_printer_mac') == null) {
                await prefs.setString('selected_printer_mac', "INNER");
             }
@@ -95,13 +88,10 @@ class _MyAppState extends State<MyApp> {
         } 
         // --- IOS DETECTION LOGIC ---
         else if (Platform.isIOS) {
-           // iOS doesn't support internal POS printers generally.
-           // We default to standard 58mm for safety unless user changes it.
            detectedMode = "58";
            print("Auto-Config: iOS Device detected. Defaulting to 58mm.");
         }
 
-        // 4. Save Settings for Native Service
         await prefs.setString('printer_width_mode', detectedMode);
       }
     } catch (e) {
@@ -109,69 +99,61 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  void _initShareListener() async {
-    final handler = ShareHandler.instance;
-
-    // 1. Listen for files shared when the app is CLOSED (Cold Start)
-    try {
-      final SharedMedia? initialMedia = await handler.getInitialSharedMedia();
-      if (initialMedia != null) {
-        _processShareResult(initialMedia, "Cold Start");
+  /// --- UPDATED SHARE LISTENER LOGIC ---
+  void _initShareListener() {
+    // 1. Listen for files shared while the app is ALREADY OPEN (Background / Hot Start)
+    _intentDataStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen(
+      (List<SharedMediaFile> value) {
+        _processShareResult(value, "Background Stream");
+      }, 
+      onError: (err) {
+        print("getMediaStream error: $err");
       }
-    } catch (e) {
-      print("Error fetching initial share: $e");
-    }
+    );
 
-    // 2. Listen for files shared while the app is ALREADY OPEN (Background)
-    _streamSubscription = handler.sharedMediaStream.listen((SharedMedia media) {
-      _processShareResult(media, "Background Stream");
+    // 2. Listen for files shared when the app is CLOSED (Cold Start)
+    ReceiveSharingIntent.instance.getInitialMedia().then((List<SharedMediaFile> value) {
+      if (value.isNotEmpty) {
+        _processShareResult(value, "Cold Start");
+        
+        // Optional: clear the intent so it doesn't re-trigger on simple app restarts
+        // ReceiveSharingIntent.instance.reset(); 
+      }
     });
   }
 
-  void _processShareResult(SharedMedia media, String source) {
-    // FIX: Safely access the attachments list
-    final attachments = media.attachments;
+  void _processShareResult(List<SharedMediaFile> files, String source) {
+    if (files.isNotEmpty) {
+      // We take the first file shared
+      final firstFile = files.first;
+      final path = firstFile.path;
 
-    if (attachments != null && attachments.isNotEmpty) {
-      // FIX: Access the first attachment safely using '?'
-      final firstAttachment = attachments.first;
-      
-      // FIX: Only access .path if firstAttachment is not null
-      final path = firstAttachment?.path;
-
-      if (path != null && path.isNotEmpty) {
+      if (path.isNotEmpty) {
         setState(() {
           _sharedFilePath = path;
         });
         print("Received file via Share ($source): $path");
       }
-    } 
-    // Check if it's just text (e.g. sharing a link or plain text)
-    else if (media.content != null && media.content!.isNotEmpty) {
-      print("Received Text ($source): ${media.content}");
     }
   }
 
   @override
   void dispose() {
-    _streamSubscription?.cancel();
+    _intentDataStreamSubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // 4. LISTEN TO LANGUAGE CHANGES
     final lang = Provider.of<LanguageService>(context);
 
     return MaterialApp(
-      // 5. USE TRANSLATED TITLE
       title: lang.translate('app_title'), 
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: false, 
       ),
-      // We pass the captured file path to HomePage
       home: HomePage(
         // The 'key' forces the HomePage to reload if a new file comes in
         key: _sharedFilePath != null ? ValueKey(_sharedFilePath) : null,
