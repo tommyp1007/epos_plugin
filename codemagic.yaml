@@ -1,53 +1,45 @@
 workflows:
-  ios-unsigned-build:
-    name: iOS Build (Unsigned for 3uTools)
-    instance_type: mac_mini_m2
+  ios-unsigned:
+    name: iOS Unsigned IPA (For 3uTools)
     max_build_duration: 60
+    instance_type: mac_mini_m1 # M1/M2 machines are faster, but standard mac_pro works too
     environment:
       flutter: stable
-      xcode: latest
+      xcode: latest # Uses the latest stable Xcode version
       cocoapods: default
+    
     scripts:
-      - name: Clean and Get Packages
+      - name: Get Flutter packages
         script: |
-          flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Deep Clean & Fix)
+      - name: Install CocoaPods
         script: |
-          cd ios
-          
-          # 1. Force remove existing Pod artifacts to prevent caching issues
-          rm -rf Pods
-          rm -rf Podfile.lock
-          
-          # 2. Update the Master Specs Repo explicitly
-          # This is the specific fix for the "out-of-date" error you saw
-          pod repo update
-          
-          # 3. Install pods using the fresh specs
-          pod install
-          cd ..
+          find . -name "Podfile" -execdir pod install \;
 
-      - name: Build iOS Release (No Code Signing)
+      - name: Build iOS App (No Codesign)
         script: |
-          flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
+          # 1. Build the Release version, but explicitly tell Flutter/Xcode NOT to sign it
+          flutter build ios --release --no-codesign
 
-      - name: Create IPA from .app
+      - name: Package as IPA
         script: |
+          # 2. Navigate to where the build artifact is
           cd build/ios/iphoneos
           
-          # 1. Clean up any previous artifacts
-          rm -rf Payload *.ipa
-          
-          # 2. Create Payload structure required by iOS
+          # 3. Create the standard IPA folder structure
+          # An IPA is just a zip file with a "Payload" folder containing the app
           mkdir Payload
+          mv Runner.app Payload/
           
-          # 3. Copy the built app into the Payload folder
-          cp -r Runner.app Payload/
+          # 4. Zip the Payload folder into an .ipa file
+          # -r: recursive
+          # -y: store symbolic links as the link instead of the referenced file (Crucial for iOS apps)
+          zip -r -y app_unsigned.ipa Payload/
           
-          # 4. Zip it into an IPA file
-          zip -r "MyInvois_e-Pos_Printer.ipa" Payload
+          # 5. Move the generated IPA to Codemagic's export directory
+          mv app_unsigned.ipa $CM_EXPORT_DIR/runner_unsigned.ipa
 
     artifacts:
-      - build/ios/iphoneos/*.ipa
+      - $CM_EXPORT_DIR/*.ipa
+      - $CM_EXPORT_DIR/*.dSYM # Optional: Good for debugging crash reports later
