@@ -14,26 +14,29 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Force Latest Specs)
+      - name: Update CocoaPods Specs (CRITICAL)
+        script: |
+          # Ensure CocoaPods repo is up to date
+          pod repo update
+
+      - name: Install Pods
         script: |
           cd ios
 
-          # Fully reset CocoaPods state
+          # Clean old pods
           pod deintegrate || true
-          rm -rf Pods
-          rm -f Podfile.lock
+          rm -rf Pods Podfile.lock
 
-          # IMPORTANT: update specs + install
-          pod install --repo-update
+          # Normal install (repo already updated)
+          pod install
 
           cd ..
 
-      - name: Build iOS Release (No Code Signing, No Pod Install)
+      - name: Build iOS Release (No Code Signing)
         script: |
           flutter build ios \
             --release \
             --no-codesign \
-            --no-pod-install \
             --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
