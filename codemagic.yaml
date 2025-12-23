@@ -4,6 +4,9 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
+      vars:
+        # Disabling stats speeds up pod install slightly
+        COCOAPODS_DISABLE_STATS: true
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -13,26 +16,23 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Fix Repo & Dependencies)
+      - name: Install CocoaPods (Clean & Install)
         script: |
           cd ios
           
-          # 1. Force update the CocoaPods public repository
-          # This fixes the "Unable to find specification" error
-          pod repo update
-          
-          # 2. Remove existing artifacts to ensure a clean install
+          # 1. Clear existing pod artifacts to force a fresh install
           rm -rf Pods
-          rm -rf Podfile.lock
+          rm -f Podfile.lock
           
-          # 3. Install Pods using the freshly updated repo
-          pod install
+          # 2. Install pods and update repo ONLY if needed (Faster than 'pod repo update')
+          pod install --repo-update
           
           cd ..
 
       - name: Build iOS Release (No Code Signing)
         script: |
           # Build the .app bundle without signing
+          # Note: This IPA will NOT install directly. It must be resigned by 3uTools/AltStore.
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
@@ -40,8 +40,7 @@ workflows:
           cd build/ios/iphoneos
           
           # 1. Clean up previous artifacts
-          rm -rf Payload
-          rm -rf *.ipa
+          rm -rf Payload *.ipa
           
           # 2. Create the Payload folder structure required by Apple
           mkdir Payload
@@ -50,7 +49,8 @@ workflows:
           cp -r Runner.app Payload/
           
           # 4. Zip the Payload folder into an .ipa file
-          zip -r epos_print_plugin.ipa Payload
+          # We use underscores to avoid issues with spaces in filenames
+          zip -r "My-Invois_e-Pos_Printer.ipa" Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
