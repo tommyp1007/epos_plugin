@@ -106,7 +106,7 @@ class AppTranslations {
       'lbl_build': 'Build',
 
       // PDF Test Print
-      'test_print_title': 'e-Pos System Test Print',
+      'test_print_title': 'MyInvois e-Pos Test Print',
       'test_print_dpi': 'DPI: ',
       'test_print_config': 'Config: ',
       'test_print_dots_suffix': ' dots (58mm)',
@@ -221,7 +221,7 @@ class AppTranslations {
       'lbl_build': 'Binaan',
 
       // PDF Test Print
-      'test_print_title': 'Cetakan Ujian Sistem e-Pos',
+      'test_print_title': 'Cetakan Ujian e-Pos MyInvois',
       'test_print_dpi': 'DPI: ',
       'test_print_config': 'Konfig: ',
       'test_print_dots_suffix': ' titik (58mm)',

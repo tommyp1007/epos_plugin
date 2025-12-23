@@ -40,7 +40,6 @@ dependencies:
   device_info_plus: ^12.3.0      # Get Android/iOS version info
   shared_preferences: ^2.5.4     # Local storage (Settings)
   share_handler: ^0.0.25         # Appear in "Share" intent menus
-  share_handler_ios: ^0.0.15     # iOS Share intent support
 
   # ------------------------------------------------
   # Media & Image Processing
@@ -53,6 +52,9 @@ dependencies:
   # ------------------------------------------------
   cupertino_icons: ^1.0.8        # iOS style icons
   webview_flutter: ^4.13.0       # Render web content
+
+dependency_overrides:
+  share_handler_ios: 0.0.14     # iOS Share intent support
 
 dev_dependencies:
   flutter_test:
