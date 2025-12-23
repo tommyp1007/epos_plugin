@@ -4,9 +4,6 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      vars:
-        # Disabling stats speeds up pod install slightly
-        COCOAPODS_DISABLE_STATS: true
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -16,23 +13,26 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Clean & Install)
+      - name: Install CocoaPods (Fix Repo & Dependencies)
         script: |
           cd ios
           
-          # 1. Clear existing pod artifacts to force a fresh install
+          # 1. Clean existing artifacts
           rm -rf Pods
           rm -f Podfile.lock
           
-          # 2. Install pods and update repo ONLY if needed (Faster than 'pod repo update')
-          pod install --repo-update
+          # 2. Force update the CocoaPods public repository
+          # This fixes the "Unable to find specification" and "out-of-date" errors
+          pod repo update
+          
+          # 3. Install Pods using the freshly updated repo
+          pod install
           
           cd ..
 
       - name: Build iOS Release (No Code Signing)
         script: |
           # Build the .app bundle without signing
-          # Note: This IPA will NOT install directly. It must be resigned by 3uTools/AltStore.
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
@@ -49,7 +49,6 @@ workflows:
           cp -r Runner.app Payload/
           
           # 4. Zip the Payload folder into an .ipa file
-          # We use underscores to avoid issues with spaces in filenames
           zip -r "My-Invois_e-Pos_Printer.ipa" Payload
 
     artifacts:
