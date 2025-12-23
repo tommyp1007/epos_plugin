@@ -17,15 +17,16 @@ workflows:
         script: |
           cd ios
           
-          # 1. Clean existing artifacts
+          # 1. Clean existing artifacts to ensure a fresh start
           rm -rf Pods
           rm -f Podfile.lock
           
           # 2. FORCE update the CocoaPods registry
-          # This fixes "Unable to find specification for share_handler_ios_models"
+          # This downloads the latest package list from the internet.
+          # It fixes the "Unable to find specification" error.
           pod repo update
           
-          # 3. Install Pods
+          # 3. Install Pods using the freshly updated registry
           pod install
           
           cd ..
@@ -42,13 +43,13 @@ workflows:
           # 1. Clean up previous artifacts
           rm -rf Payload *.ipa
           
-          # 2. Create the Payload folder structure
+          # 2. Create the Payload folder structure required by Apple
           mkdir Payload
           
           # 3. Copy the Runner.app into Payload
           cp -r Runner.app Payload/
           
-          # 4. Zip the Payload into an IPA
+          # 4. Zip the Payload folder into an .ipa file
           zip -r "MyInvois_e-Pos_Printer.ipa" Payload
 
     artifacts:

@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-// Import rootBundle to load assets for the PDF
-import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -209,11 +207,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
+    // Get fonts to support multilingual text if needed (optional but good practice)
+    // For standard PDF generation, ensure the font supports special characters if you use them.
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
       const int _selectedDpi = 203;
-      // Using 79.0mm gives a tiny buffer on standard 80mm paper to prevent clipping
       const double paperWidthMm = 79.0;
 
       final receiptFormat = PdfPageFormat(
@@ -224,79 +224,49 @@ class _HomePageState extends State<HomePage> {
 
       await Printing.layoutPdf(
         format: receiptFormat,
-        dynamicLayout: true,
+        dynamicLayout: false,
         onLayout: (PdfPageFormat format) async {
           final doc = pw.Document();
 
-          // 1. Load the image asset
-          final logoImage = pw.MemoryImage(
-            (await rootBundle.load('assets/images/print_test.png')).buffer.asUint8List(),
-          );
-
           doc.addPage(pw.Page(
-              pageFormat: format,
+              pageFormat: receiptFormat,
               build: (pw.Context context) {
-                // 2. Use FittedBox to SCALE the content to the page width
-                // This ensures it zooms in on A4, but stays normal on receipts
-                return pw.Align(
-                  alignment: pw.Alignment.topCenter,
-                  child: pw.FittedBox(
-                    child: pw.Container(
-                      // We force the container to be the design width (79mm)
-                      // The FittedBox will then stretch this container to fit the paper
-                      width: paperWidthMm * PdfPageFormat.mm,
-                      child: pw.Column(
-                        mainAxisSize: pw.MainAxisSize.min,
-                        crossAxisAlignment: pw.CrossAxisAlignment.center,
-                        children: [
-                          // Logo Image
-                          pw.Center(
-                            child: pw.Image(
-                              logoImage,
-                              width: 100,
-                              height: 100,
-                              fit: pw.BoxFit.contain,
-                            ),
-                          ),
-                          pw.SizedBox(height: 10),
-
-                          pw.Text(
-                            lang.translate('test_print_title'),
-                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
-                            textAlign: pw.TextAlign.center,
-                          ),
-                          pw.SizedBox(height: 5),
-                          pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), 
-                          pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), 
-                          pw.SizedBox(height: 10),
-                          pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                          pw.SizedBox(height: 5),
-                          pw.Row(
-                              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                              children: [
-                                pw.Text(lang.translate('test_print_left')),   
-                                pw.Text(lang.translate('test_print_center')), 
-                                pw.Text(lang.translate('test_print_right')),  
-                              ]
-                          ),
-                          pw.SizedBox(height: 5),
-                          pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                          pw.SizedBox(height: 10),
-                          pw.BarcodeWidget(
-                            barcode: pw.Barcode.qrCode(),
-                            data: 'e-Pos System Test',
-                            width: 100,
-                            height: 100,
-                          ),
-                          pw.SizedBox(height: 10),
-                          pw.Text(
-                            lang.translate('test_print_instruction'), 
-                            textAlign: pw.TextAlign.center
-                          ),
-                        ],
-                      ),
+                return pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    pw.Text(
+                      lang.translate('test_print_title'), // "e-Pos System Test Print"
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)
                     ),
-                  ),
+                    pw.SizedBox(height: 5),
+                    pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
+                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), // "Config: ... dots (58mm)"
+                    pw.SizedBox(height: 10),
+                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                    pw.SizedBox(height: 5),
+                    pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text(lang.translate('test_print_left')),   // "<< Left"
+                          pw.Text(lang.translate('test_print_center')), // "Center"
+                          pw.Text(lang.translate('test_print_right')),  // "Right >>"
+                        ]
+                    ),
+                    pw.SizedBox(height: 5),
+                    pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                    pw.SizedBox(height: 10),
+                    pw.BarcodeWidget(
+                      barcode: pw.Barcode.qrCode(),
+                      data: 'e-Pos System Test',
+                      width: 100,
+                      height: 100,
+                    ),
+                    pw.SizedBox(height: 10),
+                    pw.Text(
+                      lang.translate('test_print_instruction'), // "If 'Left' and 'Right' are cut off..."
+                      textAlign: pw.TextAlign.center
+                    ),
+                  ],
                 );
               }
           ));
