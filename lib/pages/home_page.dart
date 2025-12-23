@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+// Import rootBundle to load assets for the PDF
+import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -207,13 +209,11 @@ class _HomePageState extends State<HomePage> {
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
-    // Get fonts to support multilingual text if needed (optional but good practice)
-    // For standard PDF generation, ensure the font supports special characters if you use them.
-
     try {
       final prefs = await SharedPreferences.getInstance();
       final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
       const int _selectedDpi = 203;
+      // Example: Set width to 58mm or 80mm based on config, using 79.0 as base from original code.
       const double paperWidthMm = 79.0;
 
       final receiptFormat = PdfPageFormat(
@@ -228,15 +228,33 @@ class _HomePageState extends State<HomePage> {
         onLayout: (PdfPageFormat format) async {
           final doc = pw.Document();
 
+          // 1. Load the image asset
+          // IMPORTANT: 'assets/images/print_test.png' must be in pubspec.yaml
+          final logoImage = pw.MemoryImage(
+            (await rootBundle.load('assets/images/print_test.png')).buffer.asUint8List(),
+          );
+
           doc.addPage(pw.Page(
               pageFormat: receiptFormat,
               build: (pw.Context context) {
                 return pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
                   children: [
+                    // 2. Add Logo Image at top
+                    pw.Center(
+                      child: pw.Image(
+                        logoImage,
+                        width: 100, // Adjust width as needed
+                        height: 100, // Adjust height as needed
+                        fit: pw.BoxFit.contain,
+                      ),
+                    ),
+                    pw.SizedBox(height: 10), // Space between logo and title
+
                     pw.Text(
                       lang.translate('test_print_title'), // "e-Pos System Test Print"
-                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
+                      textAlign: pw.TextAlign.center,
                     ),
                     pw.SizedBox(height: 5),
                     pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
