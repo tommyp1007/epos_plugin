@@ -13,43 +13,36 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Fix Podfile & Build
+      - name: Install CocoaPods (Clean Install)
         script: |
           cd ios
-
-          # 1. Force the Podfile to use the official CDN
-          # This inserts "source 'https://cdn.cocoapods.org/'" at the very top of your Podfile
-          echo "source 'https://cdn.cocoapods.org/'" | cat - Podfile > Podfile.tmp && mv Podfile.tmp Podfile
-
-          # 2. Clean existing Pods and Lockfile
-          rm -rf Pods
-          rm -f Podfile.lock
-
-          # 3. Nuclear Reset of CocoaPods Trunk
-          # We remove the repo to clear corrupted cache, then install adds it back fresh.
-          pod repo remove trunk || true
           
-          # 4. Install Pods (This will re-fetch the specs fresh)
-          pod install
-
-          # 5. Build
+          # Remove existing Pods to ensure no conflicts
+          rm -rf Pods
+          rm -rf Podfile.lock
+          
+          # Install pods and update the repo in one go (The Fix)
+          pod install --repo-update
           cd ..
+
+      - name: Build iOS Release (No Code Signing)
+        script: |
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
         script: |
           cd build/ios/iphoneos
           
-          # 1. Clean up previous artifacts
+          # 1. Clean up
           rm -rf Payload *.ipa
           
-          # 2. Create the Payload folder structure required by Apple
+          # 2. Create Payload structure
           mkdir Payload
           
-          # 3. Copy the Runner.app into Payload
+          # 3. Copy Runner
           cp -r Runner.app Payload/
           
-          # 4. Zip the Payload folder into an .ipa file
+          # 4. Zip it (I restored your original filename here, change it back if you prefer 'epos_pilot')
           zip -r "MyInvois_e-Pos_Printer.ipa" Payload
 
     artifacts:
