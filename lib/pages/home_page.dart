@@ -319,7 +319,7 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.all(12.0),
                   child: Column(
                     children: [
-                      const Text("Uses Android System Print Service.\nPreview matches configured paper width.", textAlign: TextAlign.center),
+                      const Text("Uses Android/iOS System Print Service.\nPreview matches configured paper width.", textAlign: TextAlign.center),
                       const SizedBox(height: 10),
                       SizedBox(
                         width: double.infinity,
