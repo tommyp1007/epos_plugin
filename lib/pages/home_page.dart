@@ -224,7 +224,7 @@ class _HomePageState extends State<HomePage> {
 
       await Printing.layoutPdf(
         format: receiptFormat,
-        dynamicLayout: false,
+        dynamicLayout: true,
         onLayout: (PdfPageFormat format) async {
           final doc = pw.Document();
 
@@ -234,60 +234,68 @@ class _HomePageState extends State<HomePage> {
           );
 
           doc.addPage(pw.Page(
-              pageFormat: receiptFormat,
+              pageFormat: format,
               build: (pw.Context context) {
-                // WRAP WITH ALIGN to force centering on the paper
+                // 2. Use FittedBox to SCALE the content to the page width
+                // This ensures it zooms in on A4, but stays normal on receipts
                 return pw.Align(
                   alignment: pw.Alignment.topCenter,
-                  child: pw.Column(
-                    mainAxisSize: pw.MainAxisSize.min,
-                    crossAxisAlignment: pw.CrossAxisAlignment.center,
-                    children: [
-                      // 2. Add Logo Image at top
-                      pw.Center(
-                        child: pw.Image(
-                          logoImage,
-                          width: 100,
-                          height: 100,
-                          fit: pw.BoxFit.contain,
-                        ),
-                      ),
-                      pw.SizedBox(height: 10),
+                  child: pw.FittedBox(
+                    child: pw.Container(
+                      // We force the container to be the design width (79mm)
+                      // The FittedBox will then stretch this container to fit the paper
+                      width: paperWidthMm * PdfPageFormat.mm,
+                      child: pw.Column(
+                        mainAxisSize: pw.MainAxisSize.min,
+                        crossAxisAlignment: pw.CrossAxisAlignment.center,
+                        children: [
+                          // Logo Image
+                          pw.Center(
+                            child: pw.Image(
+                              logoImage,
+                              width: 100,
+                              height: 100,
+                              fit: pw.BoxFit.contain,
+                            ),
+                          ),
+                          pw.SizedBox(height: 10),
 
-                      pw.Text(
-                        lang.translate('test_print_title'),
-                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
-                        textAlign: pw.TextAlign.center,
+                          pw.Text(
+                            lang.translate('test_print_title'),
+                            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
+                            textAlign: pw.TextAlign.center,
+                          ),
+                          pw.SizedBox(height: 5),
+                          pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), 
+                          pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), 
+                          pw.SizedBox(height: 10),
+                          pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                          pw.SizedBox(height: 5),
+                          pw.Row(
+                              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                              children: [
+                                pw.Text(lang.translate('test_print_left')),   
+                                pw.Text(lang.translate('test_print_center')), 
+                                pw.Text(lang.translate('test_print_right')),  
+                              ]
+                          ),
+                          pw.SizedBox(height: 5),
+                          pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
+                          pw.SizedBox(height: 10),
+                          pw.BarcodeWidget(
+                            barcode: pw.Barcode.qrCode(),
+                            data: 'e-Pos System Test',
+                            width: 100,
+                            height: 100,
+                          ),
+                          pw.SizedBox(height: 10),
+                          pw.Text(
+                            lang.translate('test_print_instruction'), 
+                            textAlign: pw.TextAlign.center
+                          ),
+                        ],
                       ),
-                      pw.SizedBox(height: 5),
-                      pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), 
-                      pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), 
-                      pw.SizedBox(height: 10),
-                      pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                      pw.SizedBox(height: 5),
-                      pw.Row(
-                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                          children: [
-                            pw.Text(lang.translate('test_print_left')),   
-                            pw.Text(lang.translate('test_print_center')), 
-                            pw.Text(lang.translate('test_print_right')),  
-                          ]
-                      ),
-                      pw.SizedBox(height: 5),
-                      pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
-                      pw.SizedBox(height: 10),
-                      pw.BarcodeWidget(
-                        barcode: pw.Barcode.qrCode(),
-                        data: 'e-Pos System Test',
-                        width: 100,
-                        height: 100,
-                      ),
-                      pw.SizedBox(height: 10),
-                      pw.Text(
-                        lang.translate('test_print_instruction'), 
-                        textAlign: pw.TextAlign.center
-                      ),
-                    ],
+                    ),
                   ),
                 );
               }
