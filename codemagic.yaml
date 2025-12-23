@@ -13,26 +13,27 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install Pods & Build iOS Release
+      - name: Fix Podfile & Build
         script: |
-          # 1. Enter iOS directory
           cd ios
 
-          # 2. Clean existing artifacts to ensure a fresh start
+          # 1. Force the Podfile to use the official CDN
+          # This inserts "source 'https://cdn.cocoapods.org/'" at the very top of your Podfile
+          echo "source 'https://cdn.cocoapods.org/'" | cat - Podfile > Podfile.tmp && mv Podfile.tmp Podfile
+
+          # 2. Clean existing Pods and Lockfile
           rm -rf Pods
           rm -f Podfile.lock
 
-          # 3. Install Pods with FORCED repo update
-          # The flag --repo-update is critical here. It forces CocoaPods to 
-          # fetch the missing specs (like share_handler_ios_models) immediately.
-          pod install --repo-update
+          # 3. Nuclear Reset of CocoaPods Trunk
+          # We remove the repo to clear corrupted cache, then install adds it back fresh.
+          pod repo remove trunk || true
+          
+          # 4. Install Pods (This will re-fetch the specs fresh)
+          pod install
 
-          # 4. Return to root
+          # 5. Build
           cd ..
-
-          # 5. Build the .app bundle without signing
-          # Since we just ran pod install successfully above, Flutter will 
-          # detect the existing Pods and skip the failing internal pod install.
           flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
       - name: Create IPA from .app
