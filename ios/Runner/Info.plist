@@ -4,8 +4,10 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
+    
     <key>CFBundleDisplayName</key>
-    <string>Epos Print Plugin</string>
+    <string>My-Invois e-Pos Printer</string>
+    
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -66,6 +68,15 @@
 
     <key>NSPhotoLibraryUsageDescription</key>
     <string>This app needs access to photos to select images for printing.</string>
+
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs camera access to scan QR codes.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app needs microphone access for video features.</string>
+
+    <key>NSUserTrackingUsageDescription</key>
+    <string>This identifier will be used to deliver personalized ads to you.</string>
 
     <key>CFBundleURLTypes</key>
     <array>

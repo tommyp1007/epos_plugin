@@ -43,27 +43,28 @@ post_install do |installer|
     # --- PERMISSION HANDLER SETUP ---
     # This enables the specific permission logic in the binary.
     target.build_configurations.each do |config|
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
-        
-        # Enable Camera
-        'PERMISSION_CAMERA=1',
-        
-        # Enable Microphone
-        'PERMISSION_MICROPHONE=1',
-        
-        # Enable Photos (Required for saving receipts/selecting images)
-        'PERMISSION_PHOTOS=1',
-        
-        # Enable App Tracking Transparency (ATT)
-        'PERMISSION_APP_TRACKING_TRANSPARENCY=1',
-        
-        # Enable Bluetooth (Required for Thermal Printers)
-        'PERMISSION_BLUETOOTH=1',
-        
-        # Enable Location (Required for Printer Discovery on some iOS versions)
-        'PERMISSION_LOCATION=1', 
-      ]
+      
+      # Ensure preprocessor definitions exist
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+
+      # 1. Enable Bluetooth (CRITICAL for Printer Service)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_BLUETOOTH=1'
+
+      # 2. Enable Location (Often required for Bluetooth scanning on older iOS protocols)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_LOCATION=1'
+      
+      # 3. Enable Camera (If your app scans QR codes)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_CAMERA=1'
+      
+      # 4. Enable Photos (If you save receipts to gallery)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_PHOTOS=1'
+      
+      # 5. Enable Microphone (Standard inclusion if Camera is used, optional)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_MICROPHONE=1'
+
+      # 6. Enable App Tracking Transparency (Required if you track users, otherwise optional)
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_APP_TRACKING_TRANSPARENCY=1'
+
     end
     # --------------------------------
     
