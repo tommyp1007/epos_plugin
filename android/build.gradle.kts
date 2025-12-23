@@ -5,6 +5,11 @@ allprojects {
         google()
         mavenCentral()
     }
+
+    // ADD THIS BLOCK START
+    tasks.withType<JavaCompile>().configureEach {
+        options.compilerArgs.add("-Xlint:-options")
+    }
 }
 
 // Configure build directory
@@ -24,26 +29,34 @@ tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
 
-// --- COMBINED FIX FOR OLD PLUGINS (flutter_bluetooth_serial) ---
-// This handles both the Namespace error and the Java 8 obsolete warning
+// --- FINAL FIXES ---
 subprojects {
+    // 1. FIX 'lStar not found' ERROR
+    // Force older androidx.core version (1.6.0) which doesn't require Android 12 (API 31)
+    project.configurations.all {
+        resolutionStrategy {
+            force("androidx.core:core:1.6.0")
+            force("androidx.core:core-ktx:1.6.0")
+        }
+    }
+
+    // 2. FIX 'Namespace not specified' ERROR (Safe Method)
+    // We use withPlugin instead of afterEvaluate to avoid the crash
     pluginManager.withPlugin("com.android.library") {
         try {
-            val android = extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)
+            val android = extensions.findByName("android")
             if (android != null) {
-                // 1. Fix Missing Namespace
-                // Prevents "Namespace not specified" error in older plugins
-                if (android.namespace == null) {
-                    android.namespace = project.group.toString()
-                }
+                // Use reflection to set namespace safely if missing
+                val getNamespace = android.javaClass.getMethod("getNamespace")
+                val currentNamespace = getNamespace.invoke(android)
                 
-                // 2. Force Java 17 Compatibility
-                // Prevents "warning: [options] source value 8 is obsolete"
-                android.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
-                android.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+                if (currentNamespace == null) {
+                    val setNamespace = android.javaClass.getMethod("setNamespace", String::class.java)
+                    setNamespace.invoke(android, project.group.toString())
+                }
             }
         } catch (e: Exception) {
-            // Ignore errors if the extension class is not found or other issues occur
+            // Ignore reflection errors
         }
     }
 }

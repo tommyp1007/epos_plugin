@@ -266,7 +266,25 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("MyInvois e-Pos Printer"),
+        // ------------------ UPDATED SECTION ------------------
+        title: Row(
+          mainAxisSize: MainAxisSize.min, // Keeps the title content compact
+          children: [
+            Image.asset(
+              'assets/images/menu_icon.png', // Looks for file in assets/images/
+              height: 24, // Adjust icon height
+              fit: BoxFit.contain,
+            ),
+            const SizedBox(width: 8), // Spacing between icon and text
+            const Text(
+              "MyInvois e-Pos Printer",
+              style: TextStyle(
+                fontSize: 16, // Smaller font size
+              ),
+            ),
+          ],
+        ),
+        // -----------------------------------------------------
         actions: [
           IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => _loadBondedDevices())
