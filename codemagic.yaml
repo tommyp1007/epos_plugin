@@ -13,16 +13,20 @@ workflows:
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods (Clean Install)
+      - name: Install CocoaPods (Deep Clean & Fix)
         script: |
           cd ios
           
-          # Remove existing Pods to ensure no conflicts
+          # 1. Force remove existing Pod artifacts to prevent caching issues
           rm -rf Pods
           rm -rf Podfile.lock
           
-          # Install pods and update the repo in one go (The Fix)
-          pod install --repo-update
+          # 2. Update the Master Specs Repo explicitly
+          # This is the specific fix for the "out-of-date" error you saw
+          pod repo update
+          
+          # 3. Install pods using the fresh specs
+          pod install
           cd ..
 
       - name: Build iOS Release (No Code Signing)
@@ -33,16 +37,16 @@ workflows:
         script: |
           cd build/ios/iphoneos
           
-          # 1. Clean up
+          # 1. Clean up any previous artifacts
           rm -rf Payload *.ipa
           
-          # 2. Create Payload structure
+          # 2. Create Payload structure required by iOS
           mkdir Payload
           
-          # 3. Copy Runner
+          # 3. Copy the built app into the Payload folder
           cp -r Runner.app Payload/
           
-          # 4. Zip it (I restored your original filename here, change it back if you prefer 'epos_pilot')
+          # 4. Zip it into an IPA file
           zip -r "MyInvois_e-Pos_Printer.ipa" Payload
 
     artifacts:
