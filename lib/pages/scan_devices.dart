@@ -83,6 +83,35 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
     final lang = Provider.of<LanguageService>(context, listen: false);
 
+    // --- NEW: Check Bluetooth Status Before Scanning ---
+    try {
+      if (Platform.isAndroid) {
+        // 1. Check if Bluetooth is currently enabled
+        bool? isEnabled = await fbs.FlutterBluetoothSerial.instance.isEnabled;
+        
+        // 2. If off, request the user to turn it on
+        if (isEnabled == false) {
+           bool? requestResult = await fbs.FlutterBluetoothSerial.instance.requestEnable();
+           
+           // 3. If user denied the request, stop here
+           if (requestResult == false) {
+             return; 
+           }
+        }
+      } else if (Platform.isIOS) {
+        // iOS: Check if adapter is on
+        var state = await fbp.FlutterBluePlus.adapterState.first;
+        if (state != fbp.BluetoothAdapterState.on) {
+           _showSnackBar(lang.translate('msg_bt_on'));
+           return;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error checking Bluetooth status: $e");
+      // If check fails, we continue and let the scan logic try its best
+    }
+    // ---------------------------------------------------
+
     setState(() {
       _scanResults = [];
       _isScanning = true;
@@ -118,7 +147,7 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
       } else if (Platform.isIOS) {
         // --- iOS LOGIC (BLE via fbp) ---
         
-        // 1. Check Adapter State
+        // 1. Check Adapter State (Double check)
         if (await fbp.FlutterBluePlus.adapterState.first != fbp.BluetoothAdapterState.on) {
           _showSnackBar(lang.translate('msg_bt_on'));
           _stopScan();
@@ -344,8 +373,8 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
                                     ? lang.translate('btn_paired')
                                     : lang.translate('btn_pair'))
                                   : (device.isSystemConnected 
-                                      ? lang.translate('btn_select')
-                                      : lang.translate('btn_connect'))
+                                    ? lang.translate('btn_select')
+                                    : lang.translate('btn_connect'))
                       ),
                     ),
                   ),
