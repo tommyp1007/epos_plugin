@@ -53,29 +53,59 @@ class _HomePageState extends State<HomePage> {
         Permission.bluetooth,
       ].request();
     }
+    // Load devices after permissions are granted
     _loadBondedDevices();
   }
 
+  /// Loads devices. For iOS, this relies on the PrinterService fetching
+  /// locally saved devices since iOS doesn't return system paired devices.
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
+    
     try {
+      // 1. Get the list (Android: System Bonded / iOS: App Saved)
       List<BluetoothInfo> devices = await _printerService.getBondedDevices();
+      
+      // 2. Get the last used printer from storage to auto-select
+      final prefs = await SharedPreferences.getInstance();
+      final String? lastUsedMac = prefs.getString('selected_printer_mac');
 
       if (mounted) {
         setState(() {
           _pairedDevices = devices;
+          
           if (devices.isNotEmpty) {
+            // Priority 1: Mac returned from Scan Page
             if (autoSelectMac != null) {
               try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
               } catch (e) {
                 _selectedPairedDevice = devices.first;
               }
-            } else {
-              if (_selectedPairedDevice == null) {
+            } 
+            // Priority 2: Last connected device stored in Prefs
+            else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
+               try {
+                _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
+                // If we found the last used device, mark it as "connected" visually if logic permits
+                // (Optional: usually we only mark connected if we actually verify connection)
+                _connectedMac = lastUsedMac; 
+              } catch (e) {
                 _selectedPairedDevice = devices.first;
               }
             }
+            // Priority 3: Default to first
+            else {
+              if (_selectedPairedDevice == null) {
+                _selectedPairedDevice = devices.first;
+              } else {
+                // Ensure current selection is still valid in the new list
+                bool exists = devices.any((d) => d.macAdress == _selectedPairedDevice!.macAdress);
+                if (!exists) _selectedPairedDevice = devices.first;
+              }
+            }
+          } else {
+            _selectedPairedDevice = null;
           }
         });
       }
@@ -104,7 +134,10 @@ class _HomePageState extends State<HomePage> {
       await prefs.remove('printer_dpi');          // Clear Section 3 Config
       await prefs.remove('printer_width_mode');   // Clear Auto-detect Config
       
-      // Note: We do NOT remove 'language_code', so translation stays.
+      // On iOS, we might want to clear the saved list too if it's a "Full Reset"
+      if (Platform.isIOS) {
+        await prefs.remove('ios_saved_printers');
+      }
 
       // 3. Reset UI State
       if (mounted) {
@@ -115,7 +148,7 @@ class _HomePageState extends State<HomePage> {
         });
       }
 
-      // 4. Reload Paired Devices
+      // 4. Reload Paired Devices (This will be empty on iOS after clear)
       await _loadBondedDevices();
 
       // 5. Show Feedback
@@ -145,6 +178,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       if (isCurrentlyConnectedToSelection) {
+        // --- DISCONNECT LOGIC ---
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
 
@@ -156,11 +190,13 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
+        // --- CONNECT LOGIC ---
         if (_connectedMac != null) {
           await _printerService.disconnect();
           await Future.delayed(const Duration(milliseconds: 500));
         }
 
+        // Use the Service to connect (It handles iOS BLE vs Android Classic)
         bool success = await _printerService.connect(selectedMac);
 
         if (success) {
@@ -174,6 +210,7 @@ class _HomePageState extends State<HomePage> {
             _showSnackBar("${lang.translate('msg_connected')} ${_selectedPairedDevice!.name}");
           }
         } else {
+          // If failed, remove from prefs
           await prefs.remove('selected_printer_mac');
           if (mounted) {
             setState(() {
@@ -197,6 +234,7 @@ class _HomePageState extends State<HomePage> {
       context,
       MaterialPageRoute(builder: (context) => const ScanDevicesPage()),
     );
+    // If we get a MAC address back (Meaning we connected in the scan page), reload list
     if (result is String) {
       _loadBondedDevices(autoSelectMac: result);
     } else if (result == true) {
@@ -232,22 +270,22 @@ class _HomePageState extends State<HomePage> {
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
                   children: [
                     pw.Text(
-                      lang.translate('test_print_title'), // "e-Pos System Test Print"
+                      lang.translate('test_print_title'),
                       style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16),
-                      textAlign: pw.TextAlign.center, // <--- ADDED THIS TO FIX ALIGNMENT
+                      textAlign: pw.TextAlign.center,
                     ),
                     pw.SizedBox(height: 5),
-                    pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"), // "DPI: "
-                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"), // "Config: ... dots (58mm)"
+                    pw.Text("${lang.translate('test_print_dpi')}$_selectedDpi"),
+                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"),
                     pw.SizedBox(height: 10),
                     pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
                     pw.SizedBox(height: 5),
                     pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
-                          pw.Text(lang.translate('test_print_left')),   // "<< Left"
-                          pw.Text(lang.translate('test_print_center')), // "Center"
-                          pw.Text(lang.translate('test_print_right')),  // "Right >>"
+                          pw.Text(lang.translate('test_print_left')),
+                          pw.Text(lang.translate('test_print_center')),
+                          pw.Text(lang.translate('test_print_right')),
                         ]
                     ),
                     pw.SizedBox(height: 5),
@@ -261,7 +299,7 @@ class _HomePageState extends State<HomePage> {
                     ),
                     pw.SizedBox(height: 10),
                     pw.Text(
-                      lang.translate('test_print_instruction'), // "If 'Left' and 'Right' are cut off..."
+                      lang.translate('test_print_instruction'),
                       textAlign: pw.TextAlign.center
                     ),
                   ],
@@ -316,7 +354,11 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final lang = Provider.of<LanguageService>(context);
 
-    bool isSelectedDeviceConnected = (_selectedPairedDevice != null && _selectedPairedDevice!.macAdress == _connectedMac);
+    // Ensure we safely identify if the selected device matches the connected MAC
+    bool isSelectedDeviceConnected = false;
+    if (_selectedPairedDevice != null && _connectedMac != null) {
+      isSelectedDeviceConnected = (_selectedPairedDevice!.macAdress == _connectedMac);
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -354,14 +396,22 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.all(12.0),
                   child: Column(
                     children: [
+                      // DROPDOWN
                       DropdownButton<BluetoothInfo>(
                         isExpanded: true,
                         hint: Text(lang.translate('select_hint')),
-                        value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null && _pairedDevices.contains(_selectedPairedDevice))
-                            ? _selectedPairedDevice
+                        // Ensure value matches an item in the list or is null
+                        value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null) 
+                            ? _pairedDevices.firstWhere(
+                                (d) => d.macAdress == _selectedPairedDevice!.macAdress, 
+                                orElse: () => _pairedDevices.first
+                              ) 
                             : null,
                         items: _pairedDevices.map((device) {
-                          return DropdownMenuItem(value: device, child: Text(device.name.isEmpty ? lang.translate('unknown_device') : device.name));
+                          return DropdownMenuItem(
+                            value: device, 
+                            child: Text(device.name.isEmpty ? lang.translate('unknown_device') : device.name)
+                          );
                         }).toList(),
                         onChanged: (device) {
                           setState(() {
@@ -370,6 +420,8 @@ class _HomePageState extends State<HomePage> {
                         },
                       ),
                       const SizedBox(height: 5),
+                      
+                      // CONNECT BUTTON
                       ElevatedButton.icon(
                         icon: _isConnecting
                             ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -381,8 +433,10 @@ class _HomePageState extends State<HomePage> {
                           backgroundColor: isSelectedDeviceConnected ? Colors.redAccent : Colors.green,
                           foregroundColor: Colors.white,
                         ),
+                        // Disable button if no device selected or currently processing
                         onPressed: (_selectedPairedDevice == null || _isConnecting) ? null : _toggleConnection,
                       ),
+                      
                       if (_connectedMac != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 8.0),

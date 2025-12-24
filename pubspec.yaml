@@ -27,7 +27,7 @@ dependencies:
   # ------------------------------------------------
   # Connectivity (Bluetooth, Network, USB)
   # ------------------------------------------------
-  flutter_blue_plus: ^2.1.0     # BLE connectivity
+  flutter_blue_plus: ^1.36.8     # BLE connectivity
   flutter_bluetooth_serial: ^0.4.0 # BLE and Classic connectivity
   usb_serial: ^0.5.0             # USB OTG connection
   network_info_plus: ^7.0.0      # WiFi IP discovery
@@ -39,7 +39,7 @@ dependencies:
   permission_handler: ^12.0.1    # Handle Android/iOS permissions
   device_info_plus: ^12.3.0      # Get Android/iOS version info
   shared_preferences: ^2.5.4     # Local storage (Settings)
-  receive_sharing_intent: ^1.8.1       # Appear in "Share" intent menus
+  flutter_sharing_intent: ^2.0.4      # Appear in "Share" intent menus
 
   # ------------------------------------------------
   # Media & Image Processing

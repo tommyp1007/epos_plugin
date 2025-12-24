@@ -68,13 +68,8 @@ class BluetoothPrintService {
       }
 
       // --- FIX APPLIED HERE ---
-      // We added 'license: License.free'. 
-      // If you are a commercial entity with >15 employees, use License.commercial.
-      await device.connect(
-        license: License.free, // Required in flutter_blue_plus v2.0+
-        autoConnect: false, 
-        mtu: null
-      );
+      await device.connect(autoConnect: false, mtu: null);
+
       
       _connectedDevice = device;
 
