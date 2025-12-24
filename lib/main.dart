@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io'; 
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_sharing_intent/flutter_sharing_intent.dart'; 
-import 'package:flutter_sharing_intent/model/sharing_file.dart'; 
+import 'package:flutter_sharing_intent/flutter_sharing_intent.dart';
+import 'package:flutter_sharing_intent/model/sharing_file.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:provider/provider.dart';
@@ -13,7 +13,7 @@ import 'pages/home_page.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   runApp(
     ChangeNotifierProvider(
       create: (context) => LanguageService(),
@@ -46,7 +46,7 @@ class _MyAppState extends State<MyApp> {
       String? currentWidthMode = prefs.getString('printer_width_mode');
 
       if (currentWidthMode == null) {
-        String detectedMode = "58"; 
+        String detectedMode = "58";
 
         if (Platform.isAndroid) {
           final deviceInfo = DeviceInfoPlugin();
@@ -66,13 +66,13 @@ class _MyAppState extends State<MyApp> {
             if (is80mm) {
               detectedMode = "80";
             } else {
-              detectedMode = "58"; 
+              detectedMode = "58";
             }
             if (prefs.getString('selected_printer_mac') == null) {
                await prefs.setString('selected_printer_mac', "INNER");
             }
-          } 
-        } 
+          }
+        }
         else if (Platform.isIOS) {
             detectedMode = "58";
         }
@@ -80,7 +80,7 @@ class _MyAppState extends State<MyApp> {
         await prefs.setString('printer_width_mode', detectedMode);
       }
     } catch (e) {
-      print("Error during startup device detection: $e");
+      debugPrint("Error during startup device detection: $e");
     }
   }
 
@@ -89,9 +89,9 @@ class _MyAppState extends State<MyApp> {
     _intentDataStreamSubscription = FlutterSharingIntent.instance.getMediaStream().listen(
       (List<SharedFile> value) {
         _processShareResult(value, "Background Stream");
-      }, 
+      },
       onError: (err) {
-        print("getMediaStream error: $err");
+        debugPrint("getMediaStream error: $err");
       }
     );
 
@@ -110,32 +110,32 @@ class _MyAppState extends State<MyApp> {
       String? path = firstFile.value; // value contains the Text (URL) or Path
 
       if (path != null && path.isNotEmpty) {
-        
+
         // CHECK 1: Is it a Website Link? (http/https)
         // If it's a URL, we want to keep it exactly as is (no decoding).
         if (path.toLowerCase().startsWith("http")) {
             // Keep path as-is
-            print("Detected Web Link: $path");
-        } 
+            debugPrint("Detected Web Link: $path");
+        }
         // CHECK 2: Is it a Local File?
         else {
             // iOS Fix: Remove file:// prefix if present
             if (Platform.isIOS && path.startsWith("file://")) {
               path = path.replaceFirst("file://", "");
             }
-            
+
             // General Fix: Decode URI chars (e.g. %20 -> space) for local files
             try {
               path = Uri.decodeFull(path!);
             } catch (e) {
-              print("Error decoding path: $e");
+              debugPrint("Error decoding path: $e");
             }
         }
 
         setState(() {
           _sharedFilePath = path;
         });
-        print("Received content via Share ($source): $path");
+        debugPrint("Received content via Share ($source): $path");
       }
     }
   }
@@ -151,11 +151,11 @@ class _MyAppState extends State<MyApp> {
     final lang = Provider.of<LanguageService>(context);
 
     return MaterialApp(
-      title: lang.translate('app_title'), 
+      title: lang.translate('app_title'),
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,
-        useMaterial3: false, 
+        useMaterial3: false,
       ),
       home: HomePage(
         // Forces reload if file path changes
