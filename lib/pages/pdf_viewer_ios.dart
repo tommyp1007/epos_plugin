@@ -5,8 +5,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-// HTTP & File System (For downloading from Website)
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
@@ -18,15 +16,17 @@ import '../services/printer_service.dart';
 import '../services/language_service.dart';
 
 class PdfViewerPage extends StatefulWidget {
-  final String filePath; // Can be a local path OR a URL (http://...)
+  final String filePath;
   final PrinterService printerService;
   final String? connectedMac;
+  final bool autoPrint; // <-- NEW: Flag to trigger print automatically
 
   const PdfViewerPage({
     Key? key,
     required this.filePath,
     required this.printerService,
     this.connectedMac,
+    this.autoPrint = false, // Default to false unless specified
   }) : super(key: key);
 
   @override
@@ -64,23 +64,18 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
   }
 
-  // --- UPDATED: Handles both Local Files and Website URLs ---
   Future<void> _processFile() async {
     String cleanPath = widget.filePath;
     File fileToProcess;
 
     try {
-      // CASE 1: It is a Website Link (HTTP/HTTPS)
+      // 1. Handle URL or Local Path
       if (cleanPath.startsWith('http')) {
         fileToProcess = await _downloadFile(cleanPath);
-      } 
-      // CASE 2: It is a Local File
-      else {
-        // Clean up iOS file prefixes
+      } else {
         if (cleanPath.startsWith('file://')) {
           cleanPath = cleanPath.substring(7);
         }
-        // Decode URI chars (e.g. %20 -> space)
         try {
           cleanPath = Uri.decodeFull(cleanPath);
         } catch (e) {
@@ -93,66 +88,71 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         }
       }
 
-      // --- Common Processing Logic ---
+      // 2. Process Content
       final String ext = fileToProcess.path.split('.').last.toLowerCase();
       List<img.Image> rawImages = [];
-
-      // Check if PDF or Image
-      // Note: If downloaded from web without extension, we might need to check header bytes. 
-      // For now, assuming extension is valid or it's a PDF by default if unknown.
       bool isPdf = ext == 'pdf' || cleanPath.endsWith('.pdf');
 
       if (isPdf) {
         final pdfBytes = await fileToProcess.readAsBytes();
-        // Rasterize PDF at 203 DPI (Standard Thermal)
         await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
           final pngBytes = await page.toPng();
           final decoded = img.decodeImage(pngBytes);
           if (decoded != null) rawImages.add(decoded);
         }
       } else {
-        // Assume Image
         final bytes = await fileToProcess.readAsBytes();
         final decoded = img.decodeImage(bytes);
         if (decoded != null) rawImages.add(decoded);
       }
 
-      if (rawImages.isEmpty) {
-        throw Exception("Could not decode content.");
-      }
+      if (rawImages.isEmpty) throw Exception("Could not decode content.");
 
-      // Resize and Grayscale for Thermal Printer
+      // 3. Resize & Convert
       _processedImages.clear();
       _previewBytes.clear();
 
       for (var image in rawImages) {
         img.Image resized = img.copyResize(image, width: _printerWidth);
         resized = img.grayscale(resized);
-
         _processedImages.add(resized);
         _previewBytes.add(img.encodePng(resized));
       }
 
-      if (mounted) setState(() => _isLoading = false);
+      // 4. Finish Loading & Check Auto Print
+      if (mounted) {
+        setState(() => _isLoading = false);
+        
+        // --- AUTO PRINT TRIGGER ---
+        if (widget.autoPrint) {
+          // Verify we have a connection before trying
+          bool ready = await _ensureConnected();
+          if (ready) {
+            _doPrint();
+          } else {
+             // If not connected, we stay on this page so user can connect manually
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(content: Text("Auto-print paused: No printer connected."), backgroundColor: Colors.orange)
+             );
+          }
+        }
+      }
 
     } catch (e) {
        throw Exception("Error processing file: $e");
     }
   }
 
-  // Helper to download file from URL to Temp storage
   Future<File> _downloadFile(String url) async {
     final http.Response response = await http.get(Uri.parse(url));
-
     if (response.statusCode == 200) {
       final Directory tempDir = await getTemporaryDirectory();
-      // Create a temp file name
       final String tempPath = '${tempDir.path}/temp_print_download.pdf';
       final File file = File(tempPath);
       await file.writeAsBytes(response.bodyBytes);
       return file;
     } else {
-      throw Exception("Failed to download file from website. Status: ${response.statusCode}");
+      throw Exception("Failed to download file. Status: ${response.statusCode}");
     }
   }
 
@@ -165,9 +165,15 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
        setState(() => _isPrinting = true);
        try {
          bool success = await widget.printerService.connect(savedMac);
+         // If successful, update our local state to show "Ready"
+         if(success && mounted) {
+            // We don't have a callback to update Home, but that's fine for now
+         }
          return success;
        } catch (e) {
          return false;
+       } finally {
+         // Don't turn off spinner here, let _doPrint handle it if called
        }
     }
     return false;
@@ -184,7 +190,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         setState(() => _isPrinting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(lang.translate('msg_disconnected') + " (Please connect in Home Screen)"),
+            content: Text(lang.translate('msg_disconnected')),
             backgroundColor: Colors.red,
           )
         );
@@ -195,7 +201,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     try {
       List<int> bytesToPrint = [];
       bytesToPrint += [27, 64]; 
-      bytesToPrint += [27, 97, 1]; // Center
+      bytesToPrint += [27, 97, 1]; 
 
       for (var image in _processedImages) {
         bytesToPrint += PrintUtils.imageToEscPos(image);
@@ -203,7 +209,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
 
       bytesToPrint += [10, 10, 10];
-      bytesToPrint += [29, 86, 66, 0]; // Cut
+      bytesToPrint += [29, 86, 66, 0]; 
 
       await widget.printerService.sendBytes(bytesToPrint);
       
@@ -211,6 +217,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(lang.translate('msg_connected_success')), backgroundColor: Colors.green)
         );
+        
+        // OPTIONAL: Auto-close after printing?
+        // Navigator.pop(context); 
       }
     } catch (e) {
       if (mounted) {
@@ -228,7 +237,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     double mmWidth = _printerWidth / 8.0; 
     String statusText = widget.connectedMac != null 
         ? "Printer Ready" 
-        : "Printer Not Detected (Will attempt auto-connect)";
+        : "Checking connection..."; // Changed for better UX during auto-connect
 
     return Scaffold(
       appBar: AppBar(
@@ -236,7 +245,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text("Print Preview"),
-            Text("Target Width: $_printerWidth dots (~${mmWidth.toInt()}mm)", 
+            Text("Target Width: $_printerWidth dots", 
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal)),
           ],
         ),
@@ -247,8 +256,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               CircularProgressIndicator(),
-              SizedBox(height: 10),
-              Text("Processing PDF...")
+              SizedBox(height: 15),
+              Text("Preparing content..."), // Better loading text
             ],
           ))
         : _errorMessage.isNotEmpty
@@ -258,14 +267,15 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
             ))
           : Column(
               children: [
+                // Status Bar
                 Container(
                   width: double.infinity,
-                  color: widget.connectedMac != null ? Colors.green[50] : Colors.orange[50],
+                  color: Colors.blue[50],
                   padding: const EdgeInsets.all(8),
-                  child: Text(statusText, textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: widget.connectedMac != null ? Colors.green[800] : Colors.orange[900]),
-                  ),
+                  child: Text(statusText, textAlign: TextAlign.center, style: TextStyle(color: Colors.blue[900])),
                 ),
+                
+                // Preview
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.symmetric(vertical: 20),
@@ -286,6 +296,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                     ),
                   ),
                 ),
+                
+                // Print Button
                 Container(
                   padding: const EdgeInsets.all(16),
                   color: Colors.white,
@@ -298,7 +310,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                         icon: _isPrinting 
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                           : const Icon(Icons.print),
-                        label: Text(_isPrinting ? "Sending Data..." : "PRINT NOW"),
+                        label: Text(_isPrinting ? "Printing..." : "PRINT NOW"),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blueAccent,
                           foregroundColor: Colors.white,
@@ -314,7 +326,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 }
 
-// Utility needed if HomePage import is not present
+// Helper Class
 class PrintUtils {
   static List<int> imageToEscPos(img.Image image) {
     List<int> bytes = [];

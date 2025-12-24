@@ -22,7 +22,7 @@ import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
 
-// --- UPDATED: Import the new generic viewer page ---
+// Import the viewer page (Ensure your file is named pdf_viewer_page.dart or pdf_viewer_ios.dart)
 import 'pdf_viewer_ios.dart'; 
 
 class HomePage extends StatefulWidget {
@@ -47,13 +47,13 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _checkPermissions();
 
-    // --- UPDATED: Handle file on initial launch ---
+    // Handle file on initial launch
     if (widget.sharedFilePath != null) {
       _handleSharedFile(widget.sharedFilePath!);
     }
   }
 
-  // --- UPDATED: Handle file when app is already running (background) ---
+  // Handle file when app is already running (background)
   @override
   void didUpdateWidget(HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -62,71 +62,26 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- UPDATED: Centralized Shared File Logic ---
+  // --- UPDATED: Direct Navigation Logic (No Popup) ---
   void _handleSharedFile(String path) {
-    // Delay slightly to ensure context is ready
-    Future.delayed(const Duration(milliseconds: 500), () {
+    // Delay slightly to ensure context is ready, then go straight to preview/print
+    Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
-        _showSharedFileDialog(path);
+        _navigateToPreview(path);
       }
     });
   }
 
-  // ==========================================
-  // SHARED FILE HANDLING LOGIC (UPDATED)
-  // ==========================================
-  void _showSharedFileDialog(String filePath) {
-    // Check if it is a website URL or a local file path
-    bool isUrl = filePath.toLowerCase().startsWith('http');
-    String displayName = isUrl ? "Website Document" : filePath.split('/').last;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Content Received"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(isUrl 
-              ? "A link was shared from a website." 
-              : "A file was shared from another app."),
-            const SizedBox(height: 10),
-            // Show filename or generic name
-            Text("Source: $displayName", 
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 10),
-            const Text("Do you want to preview and print it?"),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.preview),
-            label: const Text("Preview & Print"),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _navigateToPreview(filePath);
-            },
-          )
-        ],
-      ),
-    );
-  }
-
+  // --- UPDATED: Pass autoPrint: true ---
   void _navigateToPreview(String filePath) {
-    // Navigate to the new PDF/Image Viewer Page
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => PdfViewerPage(
           filePath: filePath,
           printerService: _printerService,
-          connectedMac: _connectedMac, // Passing the connected status
+          connectedMac: _connectedMac, 
+          autoPrint: true, // <--- DIRECT PRINT ENABLED
         ),
       ),
     );
@@ -145,9 +100,7 @@ class _HomePageState extends State<HomePage> {
         Permission.location,
       ].request();
     } else if (Platform.isIOS) {
-      await [
-        Permission.bluetooth,
-      ].request();
+      await [Permission.bluetooth].request();
     }
     _loadBondedDevices();
   }
