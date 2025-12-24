@@ -1,9 +1,12 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 class AppTranslations {
   static final Map<String, Map<String, String>> _localizedValues = {
     'en': {
       'app_title': 'MyInvois e-Pos Printer',
-      'lang_button': 'BM', 
-      
+      'lang_button': 'BM',
+
       // Section 1
       'sec_connection': '1. Connection Manager',
       'select_hint': 'Select a paired printer',
@@ -14,17 +17,17 @@ class AppTranslations {
       'connected_to': 'Connected to',
       'connected_other': 'Connected to another device',
       'search_devices': 'Search for Devices',
-      
+
       // Section 2
       'sec_native': '2. Print Test',
       'native_desc': 'Uses Android/iOS System Print Service.\nPreview matches configured paper width.',
       'test_system_button': 'TEST PRINT',
-      
+
       // Section 3
       'sec_config': '3. Configuration',
       'width_dpi': 'Width & DPI Settings',
       'width_desc': 'Set 58mm or 80mm paper size',
-      
+
       // Snackbars / Status
       'msg_disconnected': 'Disconnected.',
       'msg_connected': 'Connected to',
@@ -63,7 +66,7 @@ class AppTranslations {
       'msg_start_scan_error': 'Start Scan Error:',
       'msg_connected_success': 'Connected successfully!',
       'msg_print_error': 'Print Error:',
-      'test_print_content': 'Works on iOS & Android!\n\n', 
+      'test_print_content': 'Works on iOS & Android!\n\n',
 
       // Configuration Page-width settings
       'title_config': 'Printer Configuration',
@@ -78,7 +81,7 @@ class AppTranslations {
       'lbl_visual': 'Visual Preview:',
       'btn_save_settings': 'SAVE SETTINGS',
       'lbl_active_area': 'Active Area',
-      
+
       // Messages & Status
       'msg_saved': 'Settings Saved:',
       'msg_internal_detect': 'Internal Printer detected. Auto-detect available.',
@@ -94,7 +97,7 @@ class AppTranslations {
       'msg_detect_error': 'Detection Error. Defaulting to 58mm.',
 
       // Settings page
-      'title_settings': 'Settings & Info', 
+      'title_settings': 'Settings & Info',
       'sec_language': 'Language',
       'sec_about': 'About',
       'lbl_version': 'Version',
@@ -116,7 +119,7 @@ class AppTranslations {
     },
     'ms': {
       'app_title': 'Pencetak MyInvois e-Pos',
-      'lang_button': 'ENG', 
+      'lang_button': 'ENG',
 
       // Section 1
       'sec_connection': '1. Pengurus Sambungan',
@@ -232,5 +235,39 @@ class AppTranslations {
 
   static String text(String key, String languageCode) {
     return _localizedValues[languageCode]?[key] ?? key;
+  }
+}
+
+class LanguageService with ChangeNotifier {
+  Locale _currentLocale = const Locale('en');
+
+  Locale get currentLocale => _currentLocale;
+
+  LanguageService() {
+    _loadLanguage();
+  }
+
+  void _loadLanguage() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? langCode = prefs.getString('language_code');
+    if (langCode != null) {
+      _currentLocale = Locale(langCode);
+      notifyListeners();
+    }
+  }
+
+  void switchLanguage() async {
+    if (_currentLocale.languageCode == 'en') {
+      _currentLocale = const Locale('ms');
+    } else {
+      _currentLocale = const Locale('en');
+    }
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString('language_code', _currentLocale.languageCode);
+    notifyListeners();
+  }
+
+  String translate(String key) {
+    return AppTranslations.text(key, _currentLocale.languageCode);
   }
 }

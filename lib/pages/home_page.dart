@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert'; // Required for utf8.encode
+import 'dart:convert'; 
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -57,7 +57,6 @@ class _HomePageState extends State<HomePage> {
     _loadBondedDevices();
   }
 
-  /// Loads devices based on Platform Logic
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
     
@@ -68,15 +67,11 @@ class _HomePageState extends State<HomePage> {
       final String? lastUsedMac = prefs.getString('selected_printer_mac');
       final String? lastUsedName = prefs.getString('selected_printer_name');
 
-      // --- iOS SPECIAL HANDLING ---
-      // iOS doesn't keep a list of "Bonded" devices exposed to apps easily.
-      // We manually add the last connected device to the list so it appears in the UI.
       if (Platform.isIOS && lastUsedMac != null && lastUsedName != null) {
-         BluetoothInfo savedDevice = BluetoothInfo(name: lastUsedName, macAdress: lastUsedMac);
-         // Avoid duplicates
-         if (!devices.any((d) => d.macAdress == lastUsedMac)) {
-           devices.add(savedDevice);
-         }
+          BluetoothInfo savedDevice = BluetoothInfo(name: lastUsedName, macAdress: lastUsedMac);
+          if (!devices.any((d) => d.macAdress == lastUsedMac)) {
+            devices.add(savedDevice);
+          }
       }
 
       if (mounted) {
@@ -84,25 +79,21 @@ class _HomePageState extends State<HomePage> {
           _pairedDevices = devices;
           
           if (devices.isNotEmpty) {
-            // 1. Priority: Auto Select (passed from Scan Page)
             if (autoSelectMac != null) {
               try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
               } catch (e) {
-                 // If not in list, create temp object
                  _selectedPairedDevice = BluetoothInfo(name: "Selected Device", macAdress: autoSelectMac);
                  _pairedDevices.add(_selectedPairedDevice!);
               }
             } 
-            // 2. Priority: Last Used (from Prefs)
             else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
                try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
               } catch (e) {
                 _selectedPairedDevice = devices.first;
               }
-            }
-            // 3. Priority: Default First
+            } 
             else if (Platform.isAndroid) {
               if (_selectedPairedDevice == null) {
                 _selectedPairedDevice = devices.first;
@@ -111,14 +102,6 @@ class _HomePageState extends State<HomePage> {
                 if (!exists) _selectedPairedDevice = devices.first;
               }
             }
-            
-            // Sync connection state if the selected device matches last known connection
-            if (lastUsedMac != null && _selectedPairedDevice?.macAdress == lastUsedMac) {
-              // We assume it might be connected if we just restarted, 
-              // but usually, we start as disconnected until verified.
-              // For this fix, we leave it null until explicitly connected.
-            }
-
           } else {
             _selectedPairedDevice = null;
           }
@@ -131,7 +114,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- FULL RESET FUNCTION ---
   Future<void> _handleFullRefresh() async {
     setState(() => _isLoadingPaired = true);
     final lang = Provider.of<LanguageService>(context, listen: false);
@@ -170,7 +152,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- CONNECT / DISCONNECT ---
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
     final lang = Provider.of<LanguageService>(context, listen: false);
@@ -184,7 +165,6 @@ class _HomePageState extends State<HomePage> {
 
     try {
       if (isCurrentlyConnectedToSelection) {
-        // Disconnect
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
         await prefs.remove('selected_printer_name'); 
@@ -197,7 +177,6 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
-        // Connect
         if (_connectedMac != null) {
           await _printerService.disconnect();
           await Future.delayed(const Duration(milliseconds: 300));
@@ -236,7 +215,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- FIXED NAVIGATION TO SCAN PAGE ---
   Future<void> _navigateToScanPage() async {
     final result = await Navigator.push(
       context,
@@ -256,37 +234,34 @@ class _HomePageState extends State<HomePage> {
         mac = result;
       }
 
-      // 1. Refresh the list to include the new device (especially for iOS)
       await _loadBondedDevices(autoSelectMac: mac);
       
-      // 2. Handle Connection State
-      // If we received a BluetoothInfo object, it implies ScanDevicesPage successfully connected.
-      // We should NOT call _toggleConnection() here because it would try to connect AGAIN,
-      // which often fails on iOS if the socket is already busy.
       if (deviceResult != null) {
-         final prefs = await SharedPreferences.getInstance();
-         await prefs.setString('selected_printer_name', name);
-         await prefs.setString('selected_printer_mac', mac);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('selected_printer_name', name);
+          await prefs.setString('selected_printer_mac', mac);
 
-         setState(() {
+          setState(() {
             _selectedPairedDevice = deviceResult;
-            // Force the UI to show Connected state immediately
             _connectedMac = mac; 
-         });
-         
-         final lang = Provider.of<LanguageService>(context, listen: false);
-         _showSnackBar("${lang.translate('msg_connected')} $name");
+          });
+          
+          final lang = Provider.of<LanguageService>(context, listen: false);
+          _showSnackBar("${lang.translate('msg_connected')} $name");
       }
     } else {
-      // Just refresh list if they backed out
       _loadBondedDevices();
     }
   }
 
-  // --- TEST PRINT FUNCTION ---
+  // --- REVISED TEST PRINT FUNCTION ---
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
+    
+    // 1. FRESH RELOAD OF PREFERENCES
+    // This ensures that if the user just clicked "Save" in settings, we get the new value immediately.
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload(); // Force reload from disk
 
     final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
     final int selectedDpi = prefs.getInt('printer_dpi') ?? 203;
@@ -296,11 +271,20 @@ class _HomePageState extends State<HomePage> {
     // -------------------------------------------------------------------------
     if (Platform.isIOS) {
        if (_connectedMac == null) {
-        _showSnackBar(lang.translate('msg_disconnected')); // "Disconnected"
+        _showSnackBar(lang.translate('msg_disconnected')); 
         return;
       }
 
       try {
+        // --- CALCULATION FOR DYNAMIC WIDTH ---
+        // Approx: Font A (normal) is 12x24 dots usually.
+        // 384 dots / 12 = 32 chars.
+        // 576 dots / 12 = 48 chars.
+        int estimatedCharsPerLine = (inputDots / 12).floor();
+        
+        // Safety clamps
+        if (estimatedCharsPerLine < 20) estimatedCharsPerLine = 32;
+
         List<int> bytes = [];
 
         // -- Initialization --
@@ -308,47 +292,70 @@ class _HomePageState extends State<HomePage> {
 
         // -- Title: Bold & Centered --
         bytes += [27, 97, 1]; // Align Center
-        bytes += [27, 33, 32]; // Double Width/Height mode (approximate)
+        bytes += [27, 33, 32]; // Double Width/Height
         bytes += utf8.encode(lang.translate('test_print_title') + "\n");
         bytes += [27, 33, 0]; // Reset Normal
-        bytes += [10]; // New line
+        bytes += [10]; 
 
         // -- Config Info (Normal Text) --
         bytes += utf8.encode("${lang.translate('test_print_dpi')}$selectedDpi\n");
         bytes += utf8.encode("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}\n");
         bytes += [10];
 
-        // -- Separator Line --
-        bytes += utf8.encode("--------------------------------\n");
+        // -- Dynamic Separator Line --
+        String separator = "-" * estimatedCharsPerLine;
+        bytes += utf8.encode(separator + "\n");
         
-        // -- Alignment Test --
-        // Note: Raw bytes cannot do perfect columns easily without fixed-width fonts,
-        // so we use spaces to simulate Left - Center - Right
+        // -- Alignment Test (Dynamic Calculation) --
         bytes += [27, 97, 0]; // Align Left
-        bytes += utf8.encode(lang.translate('test_print_left'));
+
+        // We want to print: "Left       Center       Right"
+        String leftTxt = lang.translate('test_print_left');
+        String centerTxt = lang.translate('test_print_center');
+        String rightTxt = lang.translate('test_print_right');
+
+        // Simple manual spacing logic for 3 columns
+        int totalSpaces = estimatedCharsPerLine - (leftTxt.length + centerTxt.length + rightTxt.length);
+        if (totalSpaces > 0) {
+          int spaceGap = (totalSpaces / 2).floor();
+          String gap = " " * spaceGap;
+          String line = "$leftTxt$gap$centerTxt$gap$rightTxt";
+          bytes += utf8.encode(line + "\n");
+        } else {
+          // Fallback if text is too long for width
+          bytes += utf8.encode("$leftTxt $centerTxt $rightTxt\n");
+        }
         
-        // Manual spacing to push "Center" roughly to middle
-        // (Assuming standard 32-48 char width for 58mm/80mm)
-        bytes += utf8.encode("      ${lang.translate('test_print_center')}      ");
-        
-        bytes += utf8.encode(lang.translate('test_print_right'));
-        bytes += [10]; // New Line
-        
-        bytes += utf8.encode("--------------------------------\n");
+        bytes += utf8.encode(separator + "\n");
         bytes += [10];
 
-        // -- Barcode/QR Placeholder --
-        // Generating a graphical QR code via raw bytes is complex and varies by printer firmware.
-        // We will print text data to confirm connection content.
-        bytes += [27, 97, 1]; // Center
-        bytes += utf8.encode("[QR DATA: e-Pos System Test]\n");
-        bytes += [10];
+        // -- Real QR Code Generation using ESC/POS Commands --
+        bytes += [27, 97, 1]; // Align Center
+
+        String qrData = 'e-Pos System Test';
+        List<int> qrDataBytes = utf8.encode(qrData);
+        
+        int storeLen = qrDataBytes.length + 3;
+        int storePL = storeLen % 256;
+        int storePH = storeLen ~/ 256;
+
+        // QR Setup commands (Model 2, Size, Error Correction)
+        bytes += [29, 40, 107, 4, 0, 49, 65, 50, 0];
+        bytes += [29, 40, 107, 3, 0, 49, 67, 6];
+        bytes += [29, 40, 107, 3, 0, 49, 69, 49];
+        // Store Data
+        bytes += [29, 40, 107, storePL, storePH, 49, 80, 48];
+        bytes += qrDataBytes;
+        // Print Data
+        bytes += [29, 40, 107, 3, 0, 49, 81, 48];
+        
+        bytes += [10]; 
 
         // -- Instructions --
         bytes += utf8.encode(lang.translate('test_print_instruction'));
-        bytes += [10, 10, 10]; // Feed lines
+        bytes += [10, 10, 10]; 
 
-        // -- Cut Paper (If supported) --
+        // -- Cut Paper --
         bytes += [29, 86, 66, 0]; 
 
         // Send via Bluetooth
@@ -358,14 +365,14 @@ class _HomePageState extends State<HomePage> {
       } catch (e) {
         _showSnackBar("${lang.translate('msg_print_error')} $e");
       }
-      return; // Exit function so we don't run PDF logic
+      return; 
     }
 
     // -------------------------------------------------------------------------
-    // 2. ANDROID LOGIC: PDF Generation & System Print Service
+    // 2. ANDROID LOGIC: PDF Generation
     // -------------------------------------------------------------------------
     try {
-      // Determine Paper Width (Approximate MM)
+      // Logic for Android PDF: if dots > 450, assume 80mm, else 58mm
       double paperWidthMm = (inputDots > 450) ? 79.0 : 58.0;
 
       final receiptFormat = PdfPageFormat(
@@ -471,11 +478,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // =======================================================================
-  // UI WIDGETS
-  // =======================================================================
-
-  /// 1. ANDROID UI: Dropdown + Buttons (Original Style)
   Widget _buildAndroidConnectionManager(LanguageService lang, bool isSelectedDeviceConnected) {
     return Column(
       children: [
@@ -539,11 +541,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// 2. iOS UI: Simplified "Button Only" style
   Widget _buildIOSConnectionManager(LanguageService lang, bool isSelectedDeviceConnected) {
-    
-    // Logic: If user specifically connected a device, SHOW IT.
-    // If _connectedMac is null, show "No Printer"
     if (_connectedMac == null) {
       return Column(
         children: [
@@ -551,7 +549,7 @@ class _HomePageState extends State<HomePage> {
           const Icon(Icons.bluetooth_searching, size: 50, color: Colors.blueGrey),
           const SizedBox(height: 10),
           Text(
-            "No Printer Connected", 
+            lang.translate('status_not_connected'), 
             style: TextStyle(color: Colors.grey[600], fontSize: 16)
           ),
           const SizedBox(height: 20),
@@ -560,7 +558,7 @@ class _HomePageState extends State<HomePage> {
             height: 50,
             child: ElevatedButton.icon(
               icon: const Icon(Icons.search),
-              label: const Text("Find & Connect Printer", style: TextStyle(fontSize: 16)),
+              label: Text(lang.translate('search_devices'), style: const TextStyle(fontSize: 16)), 
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue, 
                 foregroundColor: Colors.white
@@ -573,18 +571,17 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // If we have a connection
     return Column(
       children: [
         const SizedBox(height: 10),
         const Icon(Icons.print_outlined, size: 50, color: Colors.green),
         const SizedBox(height: 10),
         Text(
-          "Connected to:", 
+          lang.translate('connected_to'), 
           style: TextStyle(color: Colors.grey[600])
         ),
         Text(
-          _selectedPairedDevice?.name ?? "Unknown Device",
+          _selectedPairedDevice?.name ?? lang.translate('unknown_device'),
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         Text(
@@ -600,7 +597,7 @@ class _HomePageState extends State<HomePage> {
             icon: _isConnecting 
               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white))
               : const Icon(Icons.link_off),
-            label: Text(_isConnecting ? "Working..." : "Disconnect"),
+            label: Text(_isConnecting ? lang.translate('working') : lang.translate('disconnect')),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.redAccent, 
               foregroundColor: Colors.white
@@ -610,7 +607,7 @@ class _HomePageState extends State<HomePage> {
         ),
          const SizedBox(height: 10),
          TextButton(
-           child: const Text("Switch Printer"),
+           child: Text(lang.translate('search_devices')), 
            onPressed: _navigateToScanPage,
          )
       ],
