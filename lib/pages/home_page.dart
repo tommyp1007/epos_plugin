@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert'; 
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -8,9 +9,13 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 
+// PDF & Printing Imports
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+
+// Image Processing for Bluetooth Printing
+import 'package:image/image.dart' as img;
 
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
@@ -39,7 +44,128 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _checkPermissions();
+
+    // --- CHECK FOR SHARED FILE ---
+    if (widget.sharedFilePath != null) {
+      // Delay slightly to ensure context is ready
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _showSharedFileDialog(widget.sharedFilePath!);
+      });
+    }
   }
+
+  // ==========================================
+  // SHARED FILE HANDLING LOGIC
+  // ==========================================
+  void _showSharedFileDialog(String filePath) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text("File Received"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("A file was shared from another app."),
+            const SizedBox(height: 10),
+            Text("Path: ${filePath.split('/').last}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            const SizedBox(height: 10),
+            const Text("Do you want to print it using the connected Bluetooth printer?"),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.print),
+            label: const Text("Print Now"),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _processAndPrintSharedFile(filePath);
+            },
+          )
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processAndPrintSharedFile(String path) async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
+    if (_connectedMac == null) {
+      _showSnackBar(lang.translate('msg_disconnected'));
+      return;
+    }
+
+    setState(() => _isConnecting = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Default to 384 dots (58mm) if not set
+      final int printerWidth = prefs.getInt('printer_width_dots') ?? 384; 
+
+      List<int> bytesToPrint = [];
+      
+      // Initialize Printer
+      bytesToPrint += [27, 64]; 
+      bytesToPrint += [27, 97, 1]; // Center Align
+
+      img.Image? sourceImage;
+
+      // 1. Handle PDF
+      if (path.toLowerCase().endsWith('.pdf')) {
+        _showSnackBar("Processing PDF...");
+        final pdfBytes = File(path).readAsBytesSync();
+        
+        // Rasterize the first page of the PDF to a PNG image
+        // 203 DPI is standard for thermal printers
+        await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
+          final pngBytes = await page.toPng();
+          sourceImage = img.decodeImage(pngBytes);
+          break; // Print only the first page for this demo
+        }
+      } 
+      // 2. Handle Images
+      else {
+         _showSnackBar("Processing Image...");
+         final fileBytes = File(path).readAsBytesSync();
+         sourceImage = img.decodeImage(fileBytes);
+      }
+
+      if (sourceImage != null) {
+        // Resize to fit printer width (maintain aspect ratio)
+        sourceImage = img.copyResize(sourceImage, width: printerWidth);
+        
+        // Convert to Grayscale
+        sourceImage = img.grayscale(sourceImage);
+
+        // Convert to ESC/POS Bytes (GS v 0)
+        bytesToPrint += PrintUtils.imageToEscPos(sourceImage);
+      } else {
+        throw Exception("Could not decode image/pdf");
+      }
+
+      // Feed and Cut
+      bytesToPrint += [10, 10, 10]; // Feed 3 lines
+      bytesToPrint += [29, 86, 66, 0]; // Cut
+
+      // Send to Printer
+      await _printerService.sendBytes(bytesToPrint);
+      _showSnackBar("Print Sent Successfully!");
+
+    } catch (e) {
+      _showSnackBar("Error printing file: $e");
+    } finally {
+      setState(() => _isConnecting = false);
+    }
+  }
+
+  // ==========================================
+  // EXISTING METHODS
+  // ==========================================
 
   Future<void> _checkPermissions() async {
     if (Platform.isAndroid) {
@@ -125,7 +251,7 @@ class _HomePageState extends State<HomePage> {
       await prefs.remove('selected_printer_mac'); 
       await prefs.remove('selected_printer_name'); 
       await prefs.remove('printer_width_dots');    
-      await prefs.remove('printer_dpi');           
+      await prefs.remove('printer_dpi');            
       await prefs.remove('printer_width_mode');    
       
       if (Platform.isIOS) {
@@ -254,21 +380,20 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- REVISED TEST PRINT FUNCTION ---
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
-    
-    // 1. FRESH RELOAD OF PREFERENCES
-    // This ensures that if the user just clicked "Save" in settings, we get the new value immediately.
     final prefs = await SharedPreferences.getInstance();
-    await prefs.reload(); // Force reload from disk
+    
+    // 1. RELOAD PREFS to ensure we get the latest value saved from WidthSettings
+    await prefs.reload(); 
 
     final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
+    // selectedDpi is still loaded but not displayed
     final int selectedDpi = prefs.getInt('printer_dpi') ?? 203;
 
-    // -------------------------------------------------------------------------
-    // 1. iOS LOGIC: Manual ESC/POS Bytes Construction (Bypasses AirPrint)
-    // -------------------------------------------------------------------------
+    // 2. Calculate mm dynamically (8 dots = 1mm approx)
+    final String dynamicConfigStr = "$inputDots dots (~${(inputDots / 8).toStringAsFixed(0)}mm)";
+
     if (Platform.isIOS) {
       if (_connectedMac == null) {
         _showSnackBar(lang.translate('msg_disconnected'));
@@ -276,123 +401,74 @@ class _HomePageState extends State<HomePage> {
       }
 
       try {
-        // --- CALCULATION FOR DYNAMIC WIDTH ---
-        // Approx: Font A (normal) is 12x24 dots usually.
         int estimatedCharsPerLine = (inputDots / 12).floor();
-
-        // Safety clamps
         if (estimatedCharsPerLine < 20) estimatedCharsPerLine = 32;
 
         List<int> bytes = [];
+        bytes += [27, 64]; // Init
 
-        // -- Initialization --
-        bytes += [27, 64]; // Initialize Printer
-
-        // ---------------------------------------------------------
-        // 1. TITLE (Matches Android: Bold, Center, ~Size 16)
-        // ---------------------------------------------------------
+        // Title
         bytes += [27, 97, 1]; // Align Center
         bytes += [27, 69, 1]; // Bold ON
-        // Double Height only (closer to Size 16 vs Normal 12)
         bytes += [27, 33, 16];
         bytes += utf8.encode(lang.translate('test_print_title') + "\n");
-        bytes += [27, 33, 0]; // Reset size
-        bytes += [27, 69, 0]; // Bold OFF
-        bytes += [10]; // SizedBox(height: 5) approx
+        bytes += [27, 33, 0]; 
+        bytes += [27, 69, 0]; 
+        bytes += [10]; 
 
-        // ---------------------------------------------------------
-        // 2. INFO SECTION
-        // ---------------------------------------------------------
-        // DPI
-        bytes += utf8.encode(
-          "${lang.translate('test_print_dpi')}$selectedDpi\n",
-        );
-        // Config Dots
-        bytes += utf8.encode(
-          "${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}\n",
-        );
-        bytes += [10]; // SizedBox(height: 10)
-
-        // ---------------------------------------------------------
-        // 3. SEPARATOR & ROW (Matches Android: Line -> Gap -> Row -> Gap -> Line)
-        // ---------------------------------------------------------
-        String separator =
-            "-" * estimatedCharsPerLine; // Mimics Container(height: 2)
-
-        // Top Line
-        bytes += utf8.encode(separator + "\n");
-
-        // Gap (SizedBox height 5) - Optional: might look too big with full LF [10],
-        // but added to match structure. Remove if gap is too wide.
+        // Info
+        // Removed DPI line here as requested
+        
+        // --- UPDATED LOGIC FOR CONFIG LINE ---
+        bytes += utf8.encode("${lang.translate('test_print_config')}$dynamicConfigStr\n");
         bytes += [10];
 
-        // -- Row Logic (Left / Center / Right) --
-        bytes += [27, 97, 0]; // Align Left for manual calculation
+        // Separator
+        String separator = "-" * estimatedCharsPerLine; 
+        bytes += utf8.encode(separator + "\n");
+        bytes += [10];
 
+        // Row
+        bytes += [27, 97, 0]; // Align Left
         String leftTxt = lang.translate('test_print_left');
         String centerTxt = lang.translate('test_print_center');
         String rightTxt = lang.translate('test_print_right');
-
-        int totalSpaces =
-            estimatedCharsPerLine -
-            (leftTxt.length + centerTxt.length + rightTxt.length);
+        
+        // Calculate spacing based on width
+        int totalSpaces = estimatedCharsPerLine - (leftTxt.length + centerTxt.length + rightTxt.length);
 
         if (totalSpaces > 0) {
           int spaceGap = (totalSpaces / 2).floor();
           String gap = " " * spaceGap;
-          // Ensure we don't overflow due to rounding
           String line = "$leftTxt$gap$centerTxt$gap$rightTxt";
           bytes += utf8.encode(line + "\n");
         } else {
-          // Fallback
           bytes += utf8.encode("$leftTxt $centerTxt $rightTxt\n");
         }
-
-        // Gap (SizedBox height 5)
         bytes += [10];
-
-        // Bottom Line
         bytes += utf8.encode(separator + "\n");
-        bytes += [10]; // SizedBox(height: 10)
+        bytes += [10]; 
 
-        // ---------------------------------------------------------
-        // 4. QR CODE (Matches Android: Size 100x100)
-        // ---------------------------------------------------------
-        bytes += [27, 97, 1]; // Align Center
-
+        // QR
+        bytes += [27, 97, 1]; 
         String qrData = 'e-Pos System Test';
         List<int> qrDataBytes = utf8.encode(qrData);
-
         int storeLen = qrDataBytes.length + 3;
         int storePL = storeLen % 256;
         int storePH = storeLen ~/ 256;
-
-        // QR Model 2
         bytes += [29, 40, 107, 4, 0, 49, 65, 50, 0];
-        // Size (Module Size): 6 is roughly 100x100px depending on density
         bytes += [29, 40, 107, 3, 0, 49, 67, 6];
-        // Error Correction Level M (standard)
         bytes += [29, 40, 107, 3, 0, 49, 69, 49];
-        // Store Data
         bytes += [29, 40, 107, storePL, storePH, 49, 80, 48];
         bytes += qrDataBytes;
-        // Print QR
         bytes += [29, 40, 107, 3, 0, 49, 81, 48];
+        bytes += [10]; 
 
-        bytes += [10]; // SizedBox(height: 10)
-
-        // ---------------------------------------------------------
-        // 5. INSTRUCTIONS
-        // ---------------------------------------------------------
+        // Instructions
         bytes += utf8.encode(lang.translate('test_print_instruction'));
-
-        // Feed lines to clear cutter
         bytes += [10, 10, 10];
-
-        // -- Cut Paper --
         bytes += [29, 86, 66, 0];
 
-        // Send via Bluetooth
         await _printerService.sendBytes(bytes);
         _showSnackBar(lang.translate('msg_connected_success'));
       } catch (e) {
@@ -401,13 +477,11 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    // -------------------------------------------------------------------------
-    // 2. ANDROID LOGIC: PDF Generation
-    // -------------------------------------------------------------------------
+    // ANDROID LOGIC (PDF GENERATION)
     try {
-      // Logic for Android PDF: if dots > 450, assume 80mm, else 58mm
+      // Determine paper width for preview based on dots
       double paperWidthMm = (inputDots > 450) ? 79.0 : 58.0;
-
+      
       final receiptFormat = PdfPageFormat(
           paperWidthMm * PdfPageFormat.mm,
           double.infinity, 
@@ -419,7 +493,6 @@ class _HomePageState extends State<HomePage> {
         dynamicLayout: false,
         onLayout: (PdfPageFormat format) async {
           final doc = pw.Document();
-
           doc.addPage(pw.Page(
               pageFormat: receiptFormat,
               build: (pw.Context context) {
@@ -432,12 +505,15 @@ class _HomePageState extends State<HomePage> {
                       textAlign: pw.TextAlign.center,
                     ),
                     pw.SizedBox(height: 5),
-                    pw.Text("${lang.translate('test_print_dpi')}$selectedDpi"),
-                    pw.Text("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}"),
+                    
+                    // Removed DPI line here as requested
+                    
+                    // --- UPDATED LOGIC FOR PDF CONFIG LINE ---
+                    pw.Text("${lang.translate('test_print_config')}$dynamicConfigStr"),
+                    
                     pw.SizedBox(height: 10),
                     pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
                     pw.SizedBox(height: 5),
-                    
                     pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
@@ -446,11 +522,9 @@ class _HomePageState extends State<HomePage> {
                           pw.Text(lang.translate('test_print_right')),
                         ]
                     ),
-                    
                     pw.SizedBox(height: 5),
                     pw.Container(width: double.infinity, height: 2, color: PdfColors.black),
                     pw.SizedBox(height: 10),
-                    
                     pw.BarcodeWidget(
                       barcode: pw.Barcode.qrCode(),
                       data: 'e-Pos System Test',
@@ -458,7 +532,6 @@ class _HomePageState extends State<HomePage> {
                       height: 100,
                     ),
                     pw.SizedBox(height: 10),
-                    
                     pw.Text(
                       lang.translate('test_print_instruction'),
                       textAlign: pw.TextAlign.center
@@ -736,5 +809,44 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
+  }
+}
+
+// ==========================================
+// UTILITY FOR IMAGE TO ESC/POS CONVERSION
+// ==========================================
+class PrintUtils {
+  static List<int> imageToEscPos(img.Image image) {
+    List<int> bytes = [];
+    
+    // Command: GS v 0 (Raster Image)
+    // Header: 0x1D 0x76 0x30 0x00 xL xH yL yH
+    
+    int widthBytes = (image.width + 7) ~/ 8;
+    int height = image.height;
+    
+    bytes += [0x1D, 0x76, 0x30, 0x00];
+    bytes += [widthBytes % 256, widthBytes ~/ 256];
+    bytes += [height % 256, height ~/ 256];
+    
+    // Process pixels
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < widthBytes; x++) {
+        int byte = 0;
+        for (int b = 0; b < 8; b++) {
+          int px = x * 8 + b;
+          if (px < image.width) {
+            // Get pixel (assuming grayscale)
+            var pixel = image.getPixel(px, y);
+            // Check luminance/brightness. If dark, bit is 1. If light, bit is 0.
+            if (pixel.r < 128) { // Dark pixel
+               byte |= (1 << (7 - b));
+            }
+          }
+        }
+        bytes.add(byte);
+      }
+    }
+    return bytes;
   }
 }

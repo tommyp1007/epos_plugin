@@ -78,6 +78,8 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.image</string>
+                <string>public.jpeg</string>
+                <string>public.png</string>
             </array>
         </dict>
         <dict>
@@ -111,6 +113,5 @@
             </array>
         </dict>
     </array>
-
 </dict>
 </plist>

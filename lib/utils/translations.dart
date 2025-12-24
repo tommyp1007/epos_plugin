@@ -25,7 +25,7 @@ class AppTranslations {
 
       // Section 3
       'sec_config': '3. Configuration',
-      'width_dpi': 'Width & DPI Settings',
+      'width_dpi': 'Width Settings',
       'width_desc': 'Set 58mm or 80mm paper size',
 
       // Snackbars / Status
@@ -109,9 +109,7 @@ class AppTranslations {
 
       // PDF Test Print
       'test_print_title': 'MyInvois e-Pos Test Print',
-      'test_print_dpi': 'DPI: ',
       'test_print_config': 'Config: ',
-      'test_print_dots_suffix': ' dots (58mm)',
       'test_print_left': '<< Left',
       'test_print_center': 'Center',
       'test_print_right': 'Right >>',
@@ -139,7 +137,7 @@ class AppTranslations {
 
       // Section 3
       'sec_config': '3. Konfigurasi',
-      'width_dpi': 'Tetapan Lebar & DPI',
+      'width_dpi': 'Tetapan Lebar',
       'width_desc': 'Tetapkan saiz kertas 58mm atau 80mm',
 
       // Snackbars / Status
@@ -223,9 +221,7 @@ class AppTranslations {
 
       // PDF Test Print
       'test_print_title': 'Cetakan Ujian MyInvois e-Pos',
-      'test_print_dpi': 'DPI: ',
       'test_print_config': 'Konfig: ',
-      'test_print_dots_suffix': ' titik (58mm)',
       'test_print_left': '<< Kiri',
       'test_print_center': 'Tengah',
       'test_print_right': 'Kanan >>',
