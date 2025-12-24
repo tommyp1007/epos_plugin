@@ -85,7 +85,7 @@ class _MyAppState extends State<MyApp> {
   }
 
   void _initShareListener() {
-    // 1. App Background / Hot Start
+    // 1. App Background / Hot Start (App is already running)
     _intentDataStreamSubscription = FlutterSharingIntent.instance.getMediaStream().listen(
       (List<SharedFile> value) {
         _processShareResult(value, "Background Stream");
@@ -95,7 +95,7 @@ class _MyAppState extends State<MyApp> {
       }
     );
 
-    // 2. App Cold Start
+    // 2. App Cold Start (App was closed)
     FlutterSharingIntent.instance.getInitialSharing().then((List<SharedFile> value) {
       if (value.isNotEmpty) {
         _processShareResult(value, "Cold Start");
@@ -103,18 +103,15 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  // --- UPDATED: SMART PROCESSING (URL vs FILE) ---
+  // --- SMART PROCESSING (URL vs FILE) ---
   void _processShareResult(List<SharedFile> files, String source) {
     if (files.isNotEmpty) {
       final firstFile = files.first;
       String? path = firstFile.value; // value contains the Text (URL) or Path
 
       if (path != null && path.isNotEmpty) {
-
         // CHECK 1: Is it a Website Link? (http/https)
-        // If it's a URL, we want to keep it exactly as is (no decoding).
         if (path.toLowerCase().startsWith("http")) {
-            // Keep path as-is
             debugPrint("Detected Web Link: $path");
         }
         // CHECK 2: Is it a Local File?
@@ -124,7 +121,7 @@ class _MyAppState extends State<MyApp> {
               path = path.replaceFirst("file://", "");
             }
 
-            // General Fix: Decode URI chars (e.g. %20 -> space) for local files
+            // General Fix: Decode URI chars (e.g. %20 -> space)
             try {
               path = Uri.decodeFull(path!);
             } catch (e) {

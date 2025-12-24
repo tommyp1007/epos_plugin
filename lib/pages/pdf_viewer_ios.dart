@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -19,14 +20,14 @@ class PdfViewerPage extends StatefulWidget {
   final String filePath;
   final PrinterService printerService;
   final String? connectedMac;
-  final bool autoPrint; // Controls if we print immediately
+  final bool autoPrint;
 
   const PdfViewerPage({
     Key? key,
     required this.filePath,
     required this.printerService,
     this.connectedMac,
-    this.autoPrint = false, // Default false
+    this.autoPrint = false,
   }) : super(key: key);
 
   @override
@@ -37,8 +38,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   bool _isLoading = true;
   bool _isPrinting = false;
 
-  List<img.Image> _processedImages = [];
   List<Uint8List> _previewBytes = [];
+  List<List<int>> _readyToPrintBytes = []; 
 
   int _printerWidth = 384;
   String _errorMessage = '';
@@ -52,7 +53,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<void> _loadSettingsAndProcessFile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      // 1. GET SETTINGS FROM YOUR WIDTH CONFIGURATION PAGE
+      // Default to 384 (58mm) if not set.
       _printerWidth = prefs.getInt('printer_width_dots') ?? 384;
+      
       await _processFile();
     } catch (e) {
       if (mounted) {
@@ -69,11 +73,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     File fileToProcess;
 
     try {
-      // 1. Handle URL or Local Path
+      // --- 1. Handle URL or Local Path ---
       if (cleanPath.toLowerCase().startsWith('http')) {
         fileToProcess = await _downloadFile(cleanPath);
       } else {
-        // Basic cleaning just in case main.dart missed something
         if (cleanPath.startsWith('file://')) {
           cleanPath = cleanPath.substring(7);
         }
@@ -89,10 +92,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         }
       }
 
-      // 2. Process Content (PDF or Image)
+      // --- 2. Decode Content ---
       final String ext = fileToProcess.path.split('.').last.toLowerCase();
       List<img.Image> rawImages = [];
-      // If it ends in PDF or if we downloaded it as temp.pdf
       bool isPdf = ext == 'pdf' || fileToProcess.path.endsWith('pdf');
 
       if (isPdf) {
@@ -104,7 +106,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           if (decoded != null) rawImages.add(decoded);
         }
       } else {
-        // Assume Image
         final bytes = await fileToProcess.readAsBytes();
         final decoded = img.decodeImage(bytes);
         if (decoded != null) rawImages.add(decoded);
@@ -112,27 +113,40 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       if (rawImages.isEmpty) throw Exception("Could not decode content.");
 
-      // 3. Resize & Convert for Thermal Printer
-      _processedImages.clear();
+      // --- 3. Process Images (Trimming & Dithering) ---
       _previewBytes.clear();
+      _readyToPrintBytes.clear();
 
       for (var image in rawImages) {
-        // Resize to width
-        img.Image resized = img.copyResize(image, width: _printerWidth);
-        // Convert to grayscale
-        resized = img.grayscale(resized);
+        // A. Smart Auto-Crop (Crucial for Receipts)
+        // This removes the massive white space if printing a small receipt on an A4 PDF
+        img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
         
-        _processedImages.add(resized);
-        _previewBytes.add(img.encodePng(resized));
+        // If trimmed is null, the page was blank/noise, skip it
+        if (trimmed == null) continue;
+
+        // B. Resize to Printer Width (e.g., 384 or 576)
+        // We maintain aspect ratio for height
+        img.Image resized = img.copyResize(trimmed, width: _printerWidth);
+        
+        // C. Apply Logic (High Contrast -> Dither -> ESC/POS Bytes)
+        List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
+        
+        _readyToPrintBytes.add(escPosData);
+
+        // D. Preview
+        _previewBytes.add(img.encodePng(img.grayscale(resized)));
       }
 
-      // 4. Finish Loading & Check Auto Print
+      if (_readyToPrintBytes.isEmpty) {
+         throw Exception("Document appeared blank after processing.");
+      }
+
+      // --- 4. Finish Loading ---
       if (mounted) {
         setState(() => _isLoading = false);
 
-        // --- AUTO PRINT TRIGGER ---
         if (widget.autoPrint) {
-          // Check connection first
           bool ready = await _ensureConnected();
           if (ready) {
             _doPrint();
@@ -158,7 +172,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     final http.Response response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       final Directory tempDir = await getTemporaryDirectory();
-      // Generate unique name to avoid conflicts
       final String uniqueName = "temp_${DateTime.now().millisecondsSinceEpoch}.pdf";
       final String tempPath = '${tempDir.path}/$uniqueName';
       final File file = File(tempPath);
@@ -170,7 +183,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   Future<bool> _ensureConnected() async {
-    // If passed from Home as connected, assume good
     if (widget.connectedMac != null) return true;
     
     final prefs = await SharedPreferences.getInstance();
@@ -184,7 +196,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
        } catch (e) {
          return false;
        } finally {
-         // Keep spinner active if we are about to print, otherwise _doPrint handles it
+         // Keep spinner active if we are about to print
        }
     }
     return false;
@@ -214,9 +226,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       bytesToPrint += [27, 64]; // Init
       bytesToPrint += [27, 97, 1]; // Center Align
 
-      for (var image in _processedImages) {
-        bytesToPrint += PrintUtils.imageToEscPos(image);
-        bytesToPrint += [10]; // Small gap
+      for (var processedBytes in _readyToPrintBytes) {
+        bytesToPrint += processedBytes;
+        bytesToPrint += [10]; // Small gap between pages
       }
 
       bytesToPrint += [10, 10, 10]; // Feed
@@ -251,8 +263,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Print Preview"),
-            Text("Target Width: $_printerWidth dots",
+            const Text("Receipt Preview"),
+            Text("Width: $_printerWidth dots",
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal)),
           ],
         ),
@@ -264,7 +276,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
             children: [
               CircularProgressIndicator(),
               SizedBox(height: 15),
-              Text("Preparing content..."),
+              Text("Formatting Receipt..."),
             ],
           ))
         : _errorMessage.isNotEmpty
@@ -274,7 +286,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
             ))
           : Column(
               children: [
-                // Status Bar
                 Container(
                   width: double.infinity,
                   color: Colors.blue[50],
@@ -296,7 +307,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                               color: Colors.white,
                               boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black.withOpacity(0.2))]
                             ),
-                            child: Image.memory(bytes, fit: BoxFit.contain, filterQuality: FilterQuality.none),
+                            child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
                           );
                         }).toList(),
                       ),
@@ -317,7 +328,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                         icon: _isPrinting
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                           : const Icon(Icons.print),
-                        label: Text(_isPrinting ? "Printing..." : "PRINT NOW"),
+                        label: Text(_isPrinting ? "Printing..." : "PRINT RECEIPT"),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blueAccent,
                           foregroundColor: Colors.white,
@@ -333,28 +344,161 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 }
 
-// Helper Class (Kept in same file to ensure no import errors)
+// =========================================================
+//  LOGIC PORTED FROM KOTLIN (Auto-Crop + High Contrast)
+// =========================================================
 class PrintUtils {
-  static List<int> imageToEscPos(img.Image image) {
-    List<int> bytes = [];
-    int widthBytes = (image.width + 7) ~/ 8;
-    int height = image.height;
-    bytes += [0x1D, 0x76, 0x30, 0x00];
-    bytes += [widthBytes % 256, widthBytes ~/ 256];
-    bytes += [height % 256, height ~/ 256];
+  
+  static int clamp(int value) {
+    return value.clamp(0, 255);
+  }
+
+  /// 1. AUTO-CROP FUNCTION
+  /// Removes empty whitespace from top/bottom. Crucial for receipts.
+  static img.Image? trimWhiteSpace(img.Image source) {
+    int width = source.width;
+    int height = source.height;
+
+    int minX = width;
+    int maxX = 0;
+    int minY = height;
+    int maxY = 0;
+    bool foundContent = false;
+
+    // Thresholds
+    const int darknessThreshold = 200; // If pixel luminance < 200, it's dark
+    const int minDarkPixelsPerRow = 5; // A line needs 5 dots to be considered content
+
     for (int y = 0; y < height; y++) {
-      for (int x = 0; x < widthBytes; x++) {
-        int byte = 0;
-        for (int b = 0; b < 8; b++) {
-          int px = x * 8 + b;
-          if (px < image.width) {
-            var pixel = image.getPixel(px, y);
-            if (pixel.r < 128) byte |= (1 << (7 - b));
+      int darkPixelsInRow = 0;
+      
+      for (int x = 0; x < width; x++) {
+        img.Pixel pixel = source.getPixel(x, y);
+        num lum = img.getLuminance(pixel);
+
+        if (lum < darknessThreshold) {
+          darkPixelsInRow++;
+        }
+      }
+
+      if (darkPixelsInRow > minDarkPixelsPerRow) {
+        foundContent = true;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+
+        // Determine X bounds
+        for (int x = 0; x < width; x++) {
+          img.Pixel pixel = source.getPixel(x, y);
+          if (img.getLuminance(pixel) < darknessThreshold) {
+             if (x < minX) minX = x;
+             if (x > maxX) maxX = x;
           }
         }
-        bytes.add(byte);
       }
     }
-    return bytes;
+
+    if (!foundContent) return null; // Blank page
+
+    // Add Padding
+    const int padding = 5;
+    minX = math.max(0, minX - padding);
+    maxX = math.min(width, maxX + padding);
+    minY = math.max(0, minY - padding);
+    maxY = math.min(height, maxY + padding + 40); // Extra bottom padding for cutter
+
+    int trimWidth = maxX - minX;
+    int trimHeight = maxY - minY;
+
+    if (trimWidth <= 0 || trimHeight <= 0) return null;
+
+    return img.copyCrop(source, x: minX, y: minY, width: trimWidth, height: trimHeight);
+  }
+
+  /// 2. CONVERT TO ESC/POS
+  /// High Contrast -> Threshold -> Dither -> Bit Pack
+  static List<int> convertBitmapToEscPos(img.Image srcImage) {
+    int width = srcImage.width;
+    int height = srcImage.height;
+    int widthBytes = (width + 7) ~/ 8;
+
+    List<List<int>> grayPixels = List.generate(
+      height, 
+      (_) => List.filled(width, 0)
+    );
+
+    // Initial Grayscale + High Contrast Filter
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        img.Pixel pixel = srcImage.getPixel(x, y);
+        
+        int r = pixel.r.toInt();
+        int g = pixel.g.toInt();
+        int b = pixel.b.toInt();
+
+        // High Contrast: R' = R * 1.2 - 20
+        r = clamp(((r * 1.2) - 20).toInt());
+        g = clamp(((g * 1.2) - 20).toInt());
+        b = clamp(((b * 1.2) - 20).toInt());
+
+        int lum = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
+
+        // Hard clamping to clean up noise
+        if (lum > 215) {
+          lum = 255; 
+        } else if (lum < 130) {
+          lum = 0;   
+        }
+
+        grayPixels[y][x] = lum;
+      }
+    }
+
+    // Floyd-Steinberg Dithering
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        int oldPixel = grayPixels[y][x];
+        int newPixel = (oldPixel < 128) ? 0 : 255;
+        
+        grayPixels[y][x] = newPixel;
+        
+        int quantError = oldPixel - newPixel;
+
+        if (x + 1 < width) {
+          grayPixels[y][x + 1] = clamp(grayPixels[y][x + 1] + (quantError * 7 ~/ 16));
+        }
+        if (x - 1 >= 0 && y + 1 < height) {
+          grayPixels[y + 1][x - 1] = clamp(grayPixels[y + 1][x - 1] + (quantError * 3 ~/ 16));
+        }
+        if (y + 1 < height) {
+           grayPixels[y + 1][x] = clamp(grayPixels[y + 1][x] + (quantError * 5 ~/ 16));
+        }
+        if (x + 1 < width && y + 1 < height) {
+           grayPixels[y + 1][x + 1] = clamp(grayPixels[y + 1][x + 1] + (quantError * 1 ~/ 16));
+        }
+      }
+    }
+
+    // Bit Packing GS v 0
+    List<int> commandBytes = [];
+    commandBytes += [0x1D, 0x76, 0x30, 0x00];
+    commandBytes += [widthBytes % 256, widthBytes ~/ 256];
+    commandBytes += [height % 256, height ~/ 256];
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < widthBytes; x++) {
+        int byteValue = 0;
+        for (int b = 0; b < 8; b++) {
+          int currentX = x * 8 + b;
+          if (currentX < width) {
+            if (grayPixels[y][currentX] == 0) {
+              byteValue |= (1 << (7 - b));
+            }
+          }
+        }
+        commandBytes.add(byteValue);
+      }
+    }
+
+    return commandBytes;
   }
 }
