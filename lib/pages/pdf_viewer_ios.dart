@@ -12,7 +12,11 @@ import 'package:printing/printing.dart';
 
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
-import 'home_page.dart'; // To access PrintUtils
+
+// NOTE: We do not need to import home_page.dart if we define PrintUtils here.
+// If you prefer keeping PrintUtils in home_page.dart, uncomment the import below 
+// and remove the PrintUtils class at the bottom of this file.
+// import 'home_page.dart'; 
 
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
@@ -66,28 +70,52 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   Future<void> _processFile() async {
-    final File file = File(widget.filePath);
-    final String ext = widget.filePath.split('.').last.toLowerCase();
+    // --- FIX: DEFENSIVE PATH CLEANING ---
+    String cleanPath = widget.filePath;
+    
+    // 1. Remove file:// prefix if present (common on iOS)
+    if (cleanPath.startsWith('file://')) {
+      cleanPath = cleanPath.substring(7);
+    }
+    
+    // 2. Decode URI characters (e.g., convert "Invoice%20Scan.pdf" to "Invoice Scan.pdf")
+    try {
+      cleanPath = Uri.decodeFull(cleanPath);
+    } catch (e) {
+      print("Error decoding path: $e");
+    }
 
+    final File file = File(cleanPath);
+
+    // 3. Check if file exists before reading
+    if (!await file.exists()) {
+      throw Exception("File not found at path: $cleanPath");
+    }
+
+    final String ext = cleanPath.split('.').last.toLowerCase();
     List<img.Image> rawImages = [];
 
-    if (ext == 'pdf') {
-      final pdfBytes = await file.readAsBytes();
-      // Rasterize PDF at 203 DPI (Standard Thermal)
-      await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
-        final pngBytes = await page.toPng();
-        final decoded = img.decodeImage(pngBytes);
+    try {
+      if (ext == 'pdf') {
+        final pdfBytes = await file.readAsBytes();
+        // Rasterize PDF at 203 DPI (Standard Thermal)
+        await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
+          final pngBytes = await page.toPng();
+          final decoded = img.decodeImage(pngBytes);
+          if (decoded != null) rawImages.add(decoded);
+        }
+      } else {
+        // It's an image
+        final bytes = await file.readAsBytes();
+        final decoded = img.decodeImage(bytes);
         if (decoded != null) rawImages.add(decoded);
       }
-    } else {
-      // It's an image
-      final bytes = await file.readAsBytes();
-      final decoded = img.decodeImage(bytes);
-      if (decoded != null) rawImages.add(decoded);
+    } catch (e) {
+       throw Exception("Error reading file: $e");
     }
 
     if (rawImages.isEmpty) {
-      throw Exception("Could not decode file content.");
+      throw Exception("Could not decode file content (File might be empty or corrupted).");
     }
 
     // Resize logic to match Printer Width Settings
@@ -117,7 +145,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
   // --- SMART CONNECTION LOGIC ---
   Future<bool> _ensureConnected() async {
-    // 1. If passed from Home as connected, assume good (but we can verify via platform check if strictly needed)
+    // 1. If passed from Home as connected, assume good
     if (widget.connectedMac != null) return true;
 
     // 2. If Home didn't pass a connection (Cold Start), check Preferences
@@ -170,6 +198,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       // Convert processed images to ESC/POS
       for (var image in _processedImages) {
+        // Use the utility class defined below
         bytesToPrint += PrintUtils.imageToEscPos(image);
         bytesToPrint += [10]; // Small gap between pages/images
       }
@@ -184,8 +213,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(lang.translate('msg_connected_success')), backgroundColor: Colors.green)
         );
-        // Optional: Go back after successful print
-        // Navigator.pop(context); 
       }
     } catch (e) {
       if (mounted) {
@@ -223,7 +250,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator())
         : _errorMessage.isNotEmpty
-          ? Center(child: Text("Error: $_errorMessage"))
+          ? Center(child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Text("Error: $_errorMessage", style: const TextStyle(color: Colors.red)),
+            ))
           : Column(
               children: [
                 // STATUS BAR
@@ -297,5 +327,45 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
               ],
             ),
     );
+  }
+}
+
+// ==========================================
+// UTILITY FOR IMAGE TO ESC/POS CONVERSION
+// ==========================================
+// Included here to avoid "Undefined Class" errors if HomePage import is missing
+class PrintUtils {
+  static List<int> imageToEscPos(img.Image image) {
+    List<int> bytes = [];
+    
+    // Command: GS v 0 (Raster Image)
+    // Header: 0x1D 0x76 0x30 0x00 xL xH yL yH
+    
+    int widthBytes = (image.width + 7) ~/ 8;
+    int height = image.height;
+    
+    bytes += [0x1D, 0x76, 0x30, 0x00];
+    bytes += [widthBytes % 256, widthBytes ~/ 256];
+    bytes += [height % 256, height ~/ 256];
+    
+    // Process pixels
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < widthBytes; x++) {
+        int byte = 0;
+        for (int b = 0; b < 8; b++) {
+          int px = x * 8 + b;
+          if (px < image.width) {
+            // Get pixel (assuming grayscale)
+            var pixel = image.getPixel(px, y);
+            // Check luminance/brightness. If dark, bit is 1. If light, bit is 0.
+            if (pixel.r < 128) { // Dark pixel
+               byte |= (1 << (7 - b));
+            }
+          }
+        }
+        bytes.add(byte);
+      }
+    }
+    return bytes;
   }
 }
