@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -14,7 +13,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
-// Image Processing for Bluetooth Printing
+// Image Processing
 import 'package:image/image.dart' as img;
 
 import '../services/printer_service.dart';
@@ -95,13 +94,14 @@ class _HomePageState extends State<HomePage> {
 
   void _navigateToPreview(String filePath) {
     // Navigate to the new PDF/Image Viewer Page
+    // We pass the _printerService and the current _connectedMac
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => PdfViewerPage(
           filePath: filePath,
           printerService: _printerService,
-          connectedMac: _connectedMac,
+          connectedMac: _connectedMac, // Passing the connected status from Section 1
         ),
       ),
     );
@@ -137,6 +137,7 @@ class _HomePageState extends State<HomePage> {
       final String? lastUsedMac = prefs.getString('selected_printer_mac');
       final String? lastUsedName = prefs.getString('selected_printer_name');
 
+      // Logic to add the last used device to list if not found (iOS behavior)
       if (Platform.isIOS && lastUsedMac != null && lastUsedName != null) {
           BluetoothInfo savedDevice = BluetoothInfo(name: lastUsedName, macAdress: lastUsedMac);
           if (!devices.any((d) => d.macAdress == lastUsedMac)) {
@@ -151,10 +152,8 @@ class _HomePageState extends State<HomePage> {
           if (devices.isNotEmpty) {
             if (autoSelectMac != null) {
               try {
-                // Try to find the device object in the list that matches the MAC
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
               } catch (e) {
-                 // Fallback if not found in bonded list
                  _selectedPairedDevice = BluetoothInfo(name: "Selected Device", macAdress: autoSelectMac);
                  _pairedDevices.add(_selectedPairedDevice!);
               }
@@ -162,6 +161,10 @@ class _HomePageState extends State<HomePage> {
             else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
                try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
+                
+                // IMPORTANT: If we found a last used device, we can attempt to simulate connection state 
+                // if the service reports it's connected (optional enhancement), 
+                // but for now we just select it in the dropdown.
               } catch (e) {
                 _selectedPairedDevice = devices.first;
               }
@@ -224,7 +227,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- UPDATED TOGGLE CONNECTION METHOD ---
+  // --- TOGGLE CONNECTION METHOD ---
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
     final lang = Provider.of<LanguageService>(context, listen: false);
@@ -241,7 +244,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       if (isCurrentlyConnectedToSelection) {
-        // --- CASE 1: USER WANTS TO DISCONNECT ---
+        // --- DISCONNECT ---
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
         await prefs.remove('selected_printer_name'); 
@@ -254,13 +257,11 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
-        // --- CASE 2: USER WANTS TO CONNECT (NEW DEVICE) ---
+        // --- CONNECT ---
 
         // 1. FORCE DISCONNECT FIRST
-        // This clears any stuck sockets from previous sessions
         await _printerService.disconnect();
         
-        // Give the OS a moment to release the resource (Android specific safety)
         if (Platform.isAndroid) {
            await Future.delayed(const Duration(milliseconds: 200));
         }
@@ -268,26 +269,23 @@ class _HomePageState extends State<HomePage> {
         bool success = false;
 
         if (Platform.isAndroid) {
-           // --- ANDROID RETRY MECHANISM ---
+           // ANDROID RETRY MECHANISM
            try {
-             // Attempt 1
              success = await _printerService.connect(selectedMac);
            } catch (e) {
              debugPrint("Attempt 1 failed: $e");
            }
 
            if (!success) {
-             debugPrint("Attempt 1 failed. Retrying in 500ms...");
              await Future.delayed(const Duration(milliseconds: 500));
              try {
-               // Attempt 2
                success = await _printerService.connect(selectedMac);
              } catch (e) {
                debugPrint("Attempt 2 failed: $e");
              }
            }
         } else {
-           // --- iOS LOGIC (Standard) ---
+           // iOS LOGIC
            success = await _printerService.connect(selectedMac);
         }
 
@@ -303,7 +301,6 @@ class _HomePageState extends State<HomePage> {
             _showSnackBar("${lang.translate('msg_connected')} $selectedName");
           }
         } else {
-          // Connection failed after retries
           await prefs.remove('selected_printer_mac');
           await prefs.remove('selected_printer_name');
           if (mounted) {
@@ -342,7 +339,6 @@ class _HomePageState extends State<HomePage> {
         mac = result;
       }
 
-      // Reload list to ensure the new device is in the dropdown
       await _loadBondedDevices(autoSelectMac: mac);
       
       if (deviceResult != null) {
@@ -353,8 +349,6 @@ class _HomePageState extends State<HomePage> {
           final lang = Provider.of<LanguageService>(context, listen: false);
 
           setState(() {
-            // Explicitly sync the selected device and connected MAC
-            // This ensures the button in Section 1 updates to "Disconnect"
             _selectedPairedDevice = deviceResult;
             _connectedMac = mac; 
           });
@@ -362,7 +356,6 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar("${lang.translate('msg_connected')} $name");
       }
     } else {
-      // Just reload list if back button pressed
       _loadBondedDevices();
     }
   }
@@ -371,14 +364,9 @@ class _HomePageState extends State<HomePage> {
     final lang = Provider.of<LanguageService>(context, listen: false);
     final prefs = await SharedPreferences.getInstance();
     
-    // 1. RELOAD PREFS to ensure we get the latest value saved from WidthSettings
     await prefs.reload(); 
 
     final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
-    // selectedDpi is still loaded but not displayed
-    final int selectedDpi = prefs.getInt('printer_dpi') ?? 203;
-
-    // 2. Calculate mm dynamically (8 dots = 1mm approx)
     final String dynamicConfigStr = "$inputDots dots (~${(inputDots / 8).toStringAsFixed(0)}mm)";
 
     if (Platform.isIOS) {
@@ -392,36 +380,27 @@ class _HomePageState extends State<HomePage> {
         if (estimatedCharsPerLine < 20) estimatedCharsPerLine = 32;
 
         List<int> bytes = [];
-        bytes += [27, 64]; // Init
-
-        // Title
-        bytes += [27, 97, 1]; // Align Center
-        bytes += [27, 69, 1]; // Bold ON
+        bytes += [27, 64]; 
+        bytes += [27, 97, 1]; 
+        bytes += [27, 69, 1]; 
         bytes += [27, 33, 16];
         bytes += utf8.encode(lang.translate('test_print_title') + "\n");
         bytes += [27, 33, 0]; 
         bytes += [27, 69, 0]; 
         bytes += [10]; 
 
-        // Info
-        // Removed DPI line here as requested
-        
-        // --- UPDATED LOGIC FOR CONFIG LINE ---
         bytes += utf8.encode("${lang.translate('test_print_config')}$dynamicConfigStr\n");
         bytes += [10];
 
-        // Separator
         String separator = "-" * estimatedCharsPerLine; 
         bytes += utf8.encode(separator + "\n");
         bytes += [10];
 
-        // Row
-        bytes += [27, 97, 0]; // Align Left
+        bytes += [27, 97, 0]; 
         String leftTxt = lang.translate('test_print_left');
         String centerTxt = lang.translate('test_print_center');
         String rightTxt = lang.translate('test_print_right');
         
-        // Calculate spacing based on width
         int totalSpaces = estimatedCharsPerLine - (leftTxt.length + centerTxt.length + rightTxt.length);
 
         if (totalSpaces > 0) {
@@ -436,7 +415,6 @@ class _HomePageState extends State<HomePage> {
         bytes += utf8.encode(separator + "\n");
         bytes += [10]; 
 
-        // QR
         bytes += [27, 97, 1]; 
         String qrData = 'e-Pos System Test';
         List<int> qrDataBytes = utf8.encode(qrData);
@@ -451,7 +429,6 @@ class _HomePageState extends State<HomePage> {
         bytes += [29, 40, 107, 3, 0, 49, 81, 48];
         bytes += [10]; 
 
-        // Instructions
         bytes += utf8.encode(lang.translate('test_print_instruction'));
         bytes += [10, 10, 10];
         bytes += [29, 86, 66, 0];
@@ -466,7 +443,6 @@ class _HomePageState extends State<HomePage> {
 
     // ANDROID LOGIC (PDF GENERATION)
     try {
-      // Determine paper width for preview based on dots
       double paperWidthMm = (inputDots > 450) ? 79.0 : 58.0;
       
       final receiptFormat = PdfPageFormat(
@@ -493,9 +469,6 @@ class _HomePageState extends State<HomePage> {
                     ),
                     pw.SizedBox(height: 5),
                     
-                    // Removed DPI line here as requested
-                    
-                    // --- UPDATED LOGIC FOR PDF CONFIG LINE ---
                     pw.Text("${lang.translate('test_print_config')}$dynamicConfigStr"),
                     
                     pw.SizedBox(height: 10),

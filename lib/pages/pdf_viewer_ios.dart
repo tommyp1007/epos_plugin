@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // Image & PDF Processing
 import 'package:image/image.dart' as img;
-import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 
 import '../services/printer_service.dart';
@@ -18,6 +17,7 @@ import 'home_page.dart'; // To access PrintUtils
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
   final PrinterService printerService;
+  // We accept the MAC that HomePage thinks is connected
   final String? connectedMac;
 
   const PdfViewerPage({
@@ -56,10 +56,12 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       await _processFile();
     } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -72,7 +74,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     if (ext == 'pdf') {
       final pdfBytes = await file.readAsBytes();
       // Rasterize PDF at 203 DPI (Standard Thermal)
-      // We iterate properly through the async stream
       await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
         final pngBytes = await page.toPng();
         final decoded = img.decodeImage(pngBytes);
@@ -114,18 +115,52 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
   }
 
+  // --- SMART CONNECTION LOGIC ---
+  Future<bool> _ensureConnected() async {
+    // 1. If passed from Home as connected, assume good (but we can verify via platform check if strictly needed)
+    if (widget.connectedMac != null) return true;
+
+    // 2. If Home didn't pass a connection (Cold Start), check Preferences
+    final prefs = await SharedPreferences.getInstance();
+    final savedMac = prefs.getString('selected_printer_mac');
+
+    if (savedMac != null && savedMac.isNotEmpty) {
+       setState(() => _isPrinting = true); // Keep spinner going
+       
+       // Attempt to connect to the saved printer
+       try {
+         bool success = await widget.printerService.connect(savedMac);
+         return success;
+       } catch (e) {
+         return false;
+       }
+    }
+    return false;
+  }
+
   Future<void> _doPrint() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
-    if (widget.connectedMac == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(lang.translate('msg_disconnected')))
-      );
-      return;
-    }
-
     setState(() => _isPrinting = true);
 
+    // STEP 1: Ensure Connection
+    bool isConnected = await _ensureConnected();
+
+    if (!isConnected) {
+       if (mounted) {
+        setState(() => _isPrinting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(lang.translate('msg_disconnected') + " (Please connect in Home Screen)"),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          )
+        );
+       }
+       return;
+    }
+
+    // STEP 2: Print
     try {
       List<int> bytesToPrint = [];
 
@@ -147,15 +182,15 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Print Sent Successfully!"), backgroundColor: Colors.green)
+          SnackBar(content: Text(lang.translate('msg_connected_success')), backgroundColor: Colors.green)
         );
-        // Optional: Go back after printing
+        // Optional: Go back after successful print
         // Navigator.pop(context); 
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Print Error: $e"), backgroundColor: Colors.red)
+          SnackBar(content: Text("${lang.translate('msg_print_error')} $e"), backgroundColor: Colors.red)
         );
       }
     } finally {
@@ -167,6 +202,11 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Widget build(BuildContext context) {
     // Approx mm calculation for display
     double mmWidth = _printerWidth / 8.0; 
+    
+    // Status text logic
+    String statusText = widget.connectedMac != null 
+        ? "Printer Ready" 
+        : "Printer Not Detected (Will attempt auto-connect)";
 
     return Scaffold(
       appBar: AppBar(
@@ -179,13 +219,29 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           ],
         ),
       ),
-      backgroundColor: Colors.grey[200], // Darker background to highlight "Paper"
+      backgroundColor: Colors.grey[200], 
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator())
         : _errorMessage.isNotEmpty
           ? Center(child: Text("Error: $_errorMessage"))
           : Column(
               children: [
+                // STATUS BAR
+                Container(
+                  width: double.infinity,
+                  color: widget.connectedMac != null ? Colors.green[50] : Colors.orange[50],
+                  padding: const EdgeInsets.all(8),
+                  child: Text(
+                    statusText,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12, 
+                      color: widget.connectedMac != null ? Colors.green[800] : Colors.orange[900]
+                    ),
+                  ),
+                ),
+                
+                // PREVIEW AREA
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.symmetric(vertical: 20),
@@ -195,7 +251,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                           return Container(
                             margin: const EdgeInsets.only(bottom: 10),
                             // Limit the onscreen width to simulate the narrow paper
-                            // We allow it to scale up to 300 logical pixels or the actual width
                             constraints: const BoxConstraints(maxWidth: 400),
                             decoration: BoxDecoration(
                               color: Colors.white,
@@ -206,7 +261,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                             child: Image.memory(
                               bytes, 
                               fit: BoxFit.contain,
-                              filterQuality: FilterQuality.none, // Sharp pixels
+                              filterQuality: FilterQuality.none, 
                             ),
                           );
                         }).toList(),
@@ -214,22 +269,28 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                     ),
                   ),
                 ),
+                
+                // PRINT BUTTON
                 Container(
                   padding: const EdgeInsets.all(16),
                   color: Colors.white,
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      icon: _isPrinting 
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : const Icon(Icons.print),
-                      label: Text(_isPrinting ? "Sending..." : "PRINT NOW"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueAccent,
-                        foregroundColor: Colors.white
+                  child: SafeArea(
+                    top: false,
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton.icon(
+                        icon: _isPrinting 
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.print),
+                        label: Text(_isPrinting ? "Sending Data..." : "PRINT NOW"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueAccent,
+                          foregroundColor: Colors.white,
+                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
+                        ),
+                        onPressed: _isPrinting ? null : _doPrint,
                       ),
-                      onPressed: _isPrinting ? null : _doPrint,
                     ),
                   ),
                 )
