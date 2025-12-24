@@ -69,8 +69,11 @@ class _HomePageState extends State<HomePage> {
       final String? lastUsedName = prefs.getString('selected_printer_name');
 
       // --- iOS SPECIAL HANDLING ---
+      // iOS doesn't keep a list of "Bonded" devices exposed to apps easily.
+      // We manually add the last connected device to the list so it appears in the UI.
       if (Platform.isIOS && lastUsedMac != null && lastUsedName != null) {
          BluetoothInfo savedDevice = BluetoothInfo(name: lastUsedName, macAdress: lastUsedMac);
+         // Avoid duplicates
          if (!devices.any((d) => d.macAdress == lastUsedMac)) {
            devices.add(savedDevice);
          }
@@ -81,14 +84,17 @@ class _HomePageState extends State<HomePage> {
           _pairedDevices = devices;
           
           if (devices.isNotEmpty) {
+            // 1. Priority: Auto Select (passed from Scan Page)
             if (autoSelectMac != null) {
               try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
               } catch (e) {
+                 // If not in list, create temp object
                  _selectedPairedDevice = BluetoothInfo(name: "Selected Device", macAdress: autoSelectMac);
                  _pairedDevices.add(_selectedPairedDevice!);
               }
             } 
+            // 2. Priority: Last Used (from Prefs)
             else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
                try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
@@ -96,6 +102,7 @@ class _HomePageState extends State<HomePage> {
                 _selectedPairedDevice = devices.first;
               }
             }
+            // 3. Priority: Default First
             else if (Platform.isAndroid) {
               if (_selectedPairedDevice == null) {
                 _selectedPairedDevice = devices.first;
@@ -105,8 +112,11 @@ class _HomePageState extends State<HomePage> {
               }
             }
             
+            // Sync connection state if the selected device matches last known connection
             if (lastUsedMac != null && _selectedPairedDevice?.macAdress == lastUsedMac) {
-              _connectedMac = lastUsedMac;
+              // We assume it might be connected if we just restarted, 
+              // but usually, we start as disconnected until verified.
+              // For this fix, we leave it null until explicitly connected.
             }
 
           } else {
@@ -132,9 +142,9 @@ class _HomePageState extends State<HomePage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('selected_printer_mac'); 
       await prefs.remove('selected_printer_name'); 
-      await prefs.remove('printer_width_dots');   
-      await prefs.remove('printer_dpi');          
-      await prefs.remove('printer_width_mode');   
+      await prefs.remove('printer_width_dots');    
+      await prefs.remove('printer_dpi');           
+      await prefs.remove('printer_width_mode');    
       
       if (Platform.isIOS) {
         await prefs.remove('ios_saved_printers');
@@ -226,6 +236,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- FIXED NAVIGATION TO SCAN PAGE ---
   Future<void> _navigateToScanPage() async {
     final result = await Navigator.push(
       context,
@@ -235,29 +246,39 @@ class _HomePageState extends State<HomePage> {
     if (result != null) {
       String mac = "";
       String name = "Unknown";
+      BluetoothInfo? deviceResult;
 
       if (result is BluetoothInfo) {
+        deviceResult = result;
         mac = result.macAdress;
         name = result.name;
-         setState(() {
-          _pairedDevices.removeWhere((d) => d.macAdress == mac);
-          _pairedDevices.add(result);
-          _selectedPairedDevice = result;
-        });
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('selected_printer_name', name);
       } else if (result is String) {
         mac = result;
       }
 
+      // 1. Refresh the list to include the new device (especially for iOS)
       await _loadBondedDevices(autoSelectMac: mac);
       
-      setState(() {
-        if (_selectedPairedDevice != null) {
-           _toggleConnection(); 
-        }
-      });
+      // 2. Handle Connection State
+      // If we received a BluetoothInfo object, it implies ScanDevicesPage successfully connected.
+      // We should NOT call _toggleConnection() here because it would try to connect AGAIN,
+      // which often fails on iOS if the socket is already busy.
+      if (deviceResult != null) {
+         final prefs = await SharedPreferences.getInstance();
+         await prefs.setString('selected_printer_name', name);
+         await prefs.setString('selected_printer_mac', mac);
+
+         setState(() {
+            _selectedPairedDevice = deviceResult;
+            // Force the UI to show Connected state immediately
+            _connectedMac = mac; 
+         });
+         
+         final lang = Provider.of<LanguageService>(context, listen: false);
+         _showSnackBar("${lang.translate('msg_connected')} $name");
+      }
     } else {
+      // Just refresh list if they backed out
       _loadBondedDevices();
     }
   }
@@ -521,7 +542,9 @@ class _HomePageState extends State<HomePage> {
   /// 2. iOS UI: Simplified "Button Only" style
   Widget _buildIOSConnectionManager(LanguageService lang, bool isSelectedDeviceConnected) {
     
-    if (_selectedPairedDevice == null || _connectedMac == null) {
+    // Logic: If user specifically connected a device, SHOW IT.
+    // If _connectedMac is null, show "No Printer"
+    if (_connectedMac == null) {
       return Column(
         children: [
           const SizedBox(height: 10),
@@ -550,6 +573,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // If we have a connection
     return Column(
       children: [
         const SizedBox(height: 10),
@@ -560,11 +584,11 @@ class _HomePageState extends State<HomePage> {
           style: TextStyle(color: Colors.grey[600])
         ),
         Text(
-          _selectedPairedDevice!.name,
+          _selectedPairedDevice?.name ?? "Unknown Device",
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
         Text(
-          _selectedPairedDevice!.macAdress,
+          _selectedPairedDevice?.macAdress ?? _connectedMac ?? "",
           style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
         const SizedBox(height: 20),

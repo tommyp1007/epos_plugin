@@ -43,6 +43,7 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
   // Unified list for display
   List<UniversalBluetoothDevice> _scanResults = [];
   bool _isScanning = false;
+  bool _isConnecting = false; // Added loading state for connection
 
   // Android specific subscription (Using Prefix fbs)
   StreamSubscription<fbs.BluetoothDiscoveryResult>? _androidScanSubscription;
@@ -126,9 +127,6 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
         // 2. Fetch System Devices (Already connected in iOS Settings)
         try {
-          // FIX: Call as a function with empty list []
-          // Note: On iOS, this requires specific Service UUIDs to work perfectly, 
-          // but passing [] satisfies the compiler.
           List<fbp.BluetoothDevice> systemDevices = await fbp.FlutterBluePlus.systemDevices([]);
           
           for (var d in systemDevices) {
@@ -145,11 +143,11 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
         _iosScanSubscription = fbp.FlutterBluePlus.scanResults.listen((results) {
           if (mounted) {
-             for (var r in results) {
-               if (r.device.platformName.isNotEmpty) {
-                 _addIosDevice(r.device, rssi: r.rssi, isSystemConnected: false);
-               }
-             }
+              for (var r in results) {
+                if (r.device.platformName.isNotEmpty) {
+                  _addIosDevice(r.device, rssi: r.rssi, isSystemConnected: false);
+                }
+              }
           }
         });
       }
@@ -166,6 +164,7 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
 
   // Helper to add iOS devices safely (Uses fbp.BluetoothDevice)
   void _addIosDevice(fbp.BluetoothDevice d, {required int rssi, required bool isSystemConnected}) {
+    if (!mounted) return;
     setState(() {
       final device = UniversalBluetoothDevice(
         name: d.platformName,
@@ -213,9 +212,12 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
   }
 
   Future<void> _pairAndConnect(UniversalBluetoothDevice device) async {
+    if (_isConnecting) return;
+    
     await _stopScan();
     final lang = Provider.of<LanguageService>(context, listen: false);
 
+    setState(() => _isConnecting = true); // Show loading
     _showSnackBar("${lang.translate('msg_connecting')} ${device.name}...");
 
     try {
@@ -227,16 +229,19 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
           bool? bonded = await fbs.FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
           if (bonded != true) {
             _showSnackBar(lang.translate('msg_pair_fail'));
+            setState(() => _isConnecting = false);
             return;
           }
         }
         success = await _printerService.connect(device.address);
       } else if (Platform.isIOS) {
         // iOS: Connect directly
+        // Note: For BLE, sometimes the library needs a second attempt or a slight delay
         success = await _printerService.connect(device.address);
       }
 
       if (mounted) {
+        setState(() => _isConnecting = false);
         if (success) {
           // Return the Full BluetoothInfo Object (from print_bluetooth_thermal package)
           BluetoothInfo info = BluetoothInfo(
@@ -249,7 +254,10 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
         }
       }
     } catch (e) {
-      if (mounted) _showSnackBar("Error: $e");
+      if (mounted) {
+        setState(() => _isConnecting = false);
+        _showSnackBar("Error: $e");
+      }
     }
   }
 
@@ -323,17 +331,21 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
                     title: Text(device.name, style: TextStyle(fontWeight: device.isSystemConnected ? FontWeight.bold : FontWeight.normal)),
                     subtitle: Text(subtitle),
                     trailing: ElevatedButton(
-                      onPressed: (Platform.isAndroid && device.isBonded)
-                          ? null
-                          : () => _pairAndConnect(device),
-                      child: Text(
-                          Platform.isAndroid
-                              ? (device.isBonded
-                                ? lang.translate('btn_paired')
-                                : lang.translate('btn_pair'))
-                              : (device.isSystemConnected 
-                                  ? lang.translate('btn_select')
-                                  : lang.translate('btn_connect'))
+                      onPressed: _isConnecting // Disable buttons while one is connecting
+                          ? null 
+                          : (Platform.isAndroid && device.isBonded)
+                              ? null // Android specific logic
+                              : () => _pairAndConnect(device),
+                      child: _isConnecting && device.address == (_scanResults[index].address) // Only show loading on clicked item if possible, but simpler to just show text
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : Text(
+                              Platform.isAndroid
+                                  ? (device.isBonded
+                                    ? lang.translate('btn_paired')
+                                    : lang.translate('btn_pair'))
+                                  : (device.isSystemConnected 
+                                      ? lang.translate('btn_select')
+                                      : lang.translate('btn_connect'))
                       ),
                     ),
                   ),
