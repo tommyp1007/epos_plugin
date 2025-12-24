@@ -270,102 +270,135 @@ class _HomePageState extends State<HomePage> {
     // 1. iOS LOGIC: Manual ESC/POS Bytes Construction (Bypasses AirPrint)
     // -------------------------------------------------------------------------
     if (Platform.isIOS) {
-       if (_connectedMac == null) {
-        _showSnackBar(lang.translate('msg_disconnected')); 
+      if (_connectedMac == null) {
+        _showSnackBar(lang.translate('msg_disconnected'));
         return;
       }
 
       try {
         // --- CALCULATION FOR DYNAMIC WIDTH ---
         // Approx: Font A (normal) is 12x24 dots usually.
-        // 384 dots / 12 = 32 chars.
-        // 576 dots / 12 = 48 chars.
         int estimatedCharsPerLine = (inputDots / 12).floor();
-        
+
         // Safety clamps
         if (estimatedCharsPerLine < 20) estimatedCharsPerLine = 32;
 
         List<int> bytes = [];
 
         // -- Initialization --
-        bytes += [27, 64]; 
+        bytes += [27, 64]; // Initialize Printer
 
-        // -- Title: Bold & Centered --
+        // ---------------------------------------------------------
+        // 1. TITLE (Matches Android: Bold, Center, ~Size 16)
+        // ---------------------------------------------------------
         bytes += [27, 97, 1]; // Align Center
-        bytes += [27, 33, 32]; // Double Width/Height
+        bytes += [27, 69, 1]; // Bold ON
+        // Double Height only (closer to Size 16 vs Normal 12)
+        bytes += [27, 33, 16];
         bytes += utf8.encode(lang.translate('test_print_title') + "\n");
-        bytes += [27, 33, 0]; // Reset Normal
-        bytes += [10]; 
+        bytes += [27, 33, 0]; // Reset size
+        bytes += [27, 69, 0]; // Bold OFF
+        bytes += [10]; // SizedBox(height: 5) approx
 
-        // -- Config Info (Normal Text) --
-        bytes += utf8.encode("${lang.translate('test_print_dpi')}$selectedDpi\n");
-        bytes += utf8.encode("${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}\n");
+        // ---------------------------------------------------------
+        // 2. INFO SECTION
+        // ---------------------------------------------------------
+        // DPI
+        bytes += utf8.encode(
+          "${lang.translate('test_print_dpi')}$selectedDpi\n",
+        );
+        // Config Dots
+        bytes += utf8.encode(
+          "${lang.translate('test_print_config')}$inputDots${lang.translate('test_print_dots_suffix')}\n",
+        );
+        bytes += [10]; // SizedBox(height: 10)
+
+        // ---------------------------------------------------------
+        // 3. SEPARATOR & ROW (Matches Android: Line -> Gap -> Row -> Gap -> Line)
+        // ---------------------------------------------------------
+        String separator =
+            "-" * estimatedCharsPerLine; // Mimics Container(height: 2)
+
+        // Top Line
+        bytes += utf8.encode(separator + "\n");
+
+        // Gap (SizedBox height 5) - Optional: might look too big with full LF [10],
+        // but added to match structure. Remove if gap is too wide.
         bytes += [10];
 
-        // -- Dynamic Separator Line --
-        String separator = "-" * estimatedCharsPerLine;
-        bytes += utf8.encode(separator + "\n");
-        
-        // -- Alignment Test (Dynamic Calculation) --
-        bytes += [27, 97, 0]; // Align Left
+        // -- Row Logic (Left / Center / Right) --
+        bytes += [27, 97, 0]; // Align Left for manual calculation
 
-        // We want to print: "Left       Center       Right"
         String leftTxt = lang.translate('test_print_left');
         String centerTxt = lang.translate('test_print_center');
         String rightTxt = lang.translate('test_print_right');
 
-        // Simple manual spacing logic for 3 columns
-        int totalSpaces = estimatedCharsPerLine - (leftTxt.length + centerTxt.length + rightTxt.length);
+        int totalSpaces =
+            estimatedCharsPerLine -
+            (leftTxt.length + centerTxt.length + rightTxt.length);
+
         if (totalSpaces > 0) {
           int spaceGap = (totalSpaces / 2).floor();
           String gap = " " * spaceGap;
+          // Ensure we don't overflow due to rounding
           String line = "$leftTxt$gap$centerTxt$gap$rightTxt";
           bytes += utf8.encode(line + "\n");
         } else {
-          // Fallback if text is too long for width
+          // Fallback
           bytes += utf8.encode("$leftTxt $centerTxt $rightTxt\n");
         }
-        
-        bytes += utf8.encode(separator + "\n");
+
+        // Gap (SizedBox height 5)
         bytes += [10];
 
-        // -- Real QR Code Generation using ESC/POS Commands --
+        // Bottom Line
+        bytes += utf8.encode(separator + "\n");
+        bytes += [10]; // SizedBox(height: 10)
+
+        // ---------------------------------------------------------
+        // 4. QR CODE (Matches Android: Size 100x100)
+        // ---------------------------------------------------------
         bytes += [27, 97, 1]; // Align Center
 
         String qrData = 'e-Pos System Test';
         List<int> qrDataBytes = utf8.encode(qrData);
-        
+
         int storeLen = qrDataBytes.length + 3;
         int storePL = storeLen % 256;
         int storePH = storeLen ~/ 256;
 
-        // QR Setup commands (Model 2, Size, Error Correction)
+        // QR Model 2
         bytes += [29, 40, 107, 4, 0, 49, 65, 50, 0];
+        // Size (Module Size): 6 is roughly 100x100px depending on density
         bytes += [29, 40, 107, 3, 0, 49, 67, 6];
+        // Error Correction Level M (standard)
         bytes += [29, 40, 107, 3, 0, 49, 69, 49];
         // Store Data
         bytes += [29, 40, 107, storePL, storePH, 49, 80, 48];
         bytes += qrDataBytes;
-        // Print Data
+        // Print QR
         bytes += [29, 40, 107, 3, 0, 49, 81, 48];
-        
-        bytes += [10]; 
 
-        // -- Instructions --
+        bytes += [10]; // SizedBox(height: 10)
+
+        // ---------------------------------------------------------
+        // 5. INSTRUCTIONS
+        // ---------------------------------------------------------
         bytes += utf8.encode(lang.translate('test_print_instruction'));
-        bytes += [10, 10, 10]; 
+
+        // Feed lines to clear cutter
+        bytes += [10, 10, 10];
 
         // -- Cut Paper --
-        bytes += [29, 86, 66, 0]; 
+        bytes += [29, 86, 66, 0];
 
         // Send via Bluetooth
         await _printerService.sendBytes(bytes);
-        _showSnackBar(lang.translate('msg_connected_success')); 
-
+        _showSnackBar(lang.translate('msg_connected_success'));
       } catch (e) {
         _showSnackBar("${lang.translate('msg_print_error')} $e");
       }
-      return; 
+      return;
     }
 
     // -------------------------------------------------------------------------
