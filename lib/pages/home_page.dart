@@ -16,13 +16,16 @@ import 'package:printing/printing.dart';
 // Image Processing
 import 'package:image/image.dart' as img;
 
+// File Picker (Required for Section 4 Manual Selection)
+import 'package:file_picker/file_picker.dart'; 
+
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
 import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
 
-// Import the viewer page (Ensure your file is named pdf_viewer_page.dart or pdf_viewer_ios.dart)
+// Import the viewer page
 import 'pdf_viewer_ios.dart'; 
 
 class HomePage extends StatefulWidget {
@@ -47,7 +50,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _checkPermissions();
 
-    // Handle file on initial launch
+    // Handle file on initial launch (Auto-print logic)
     if (widget.sharedFilePath != null) {
       _handleSharedFile(widget.sharedFilePath!);
     }
@@ -62,18 +65,38 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- UPDATED: Direct Navigation Logic (No Popup) ---
+  // --- UPDATED: Direct Navigation Logic (Shared/Intent Files) ---
   void _handleSharedFile(String path) {
-    // Delay slightly to ensure context is ready, then go straight to preview/print
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
-        _navigateToPreview(path);
+        // Auto-print true for shared files
+        _navigateToPreview(path, isAutoPrint: true);
       }
     });
   }
 
-  // --- UPDATED: Pass autoPrint: true ---
-  void _navigateToPreview(String filePath) {
+  // --- NEW: Manual File Picker for Section 4 ---
+  Future<void> _pickAndPrintFile() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
+      );
+
+      if (result != null && result.files.single.path != null) {
+        // Auto-print false for manual selection (so you can preview first)
+        _navigateToPreview(result.files.single.path!, isAutoPrint: false);
+      }
+    } catch (e) {
+      debugPrint("Error picking file: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error picking file: $e"), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  // --- UPDATED: Navigate to Preview ---
+  void _navigateToPreview(String filePath, {bool isAutoPrint = true}) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -81,7 +104,7 @@ class _HomePageState extends State<HomePage> {
           filePath: filePath,
           printerService: _printerService,
           connectedMac: _connectedMac, 
-          autoPrint: true, // <--- DIRECT PRINT ENABLED
+          autoPrint: isAutoPrint, // Pass the flag
         ),
       ),
     );
@@ -737,7 +760,23 @@ class _HomePageState extends State<HomePage> {
                   trailing: const Icon(Icons.arrow_forward_ios),
                   onTap: _openPrinterConfig,
                 ),
-              )
+              ),
+              
+              // --- SECTION 4: PDF Viewer (iOS ONLY) ---
+              if (Platform.isIOS) ...[
+                const SizedBox(height: 20),
+                const Text("Section 4: PDF Viewer / Manual Print", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Card(
+                  elevation: 2,
+                  child: ListTile(
+                    leading: const Icon(Icons.picture_as_pdf, size: 40, color: Colors.red),
+                    title: const Text("Select Document"),
+                    subtitle: const Text("Pick a PDF or Image to print"),
+                    trailing: const Icon(Icons.arrow_forward_ios),
+                    onTap: _pickAndPrintFile,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
