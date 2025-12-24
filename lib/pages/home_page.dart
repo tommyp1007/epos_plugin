@@ -22,6 +22,7 @@ import '../services/language_service.dart';
 import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
+import 'pdf_viewer_ios.dart'; // Import the new preview page
 
 class HomePage extends StatefulWidget {
   final String? sharedFilePath;
@@ -55,7 +56,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ==========================================
-  // SHARED FILE HANDLING LOGIC
+  // SHARED FILE HANDLING LOGIC (UPDATED)
   // ==========================================
   void _showSharedFileDialog(String filePath) {
     showDialog(
@@ -71,7 +72,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 10),
             Text("Path: ${filePath.split('/').last}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
             const SizedBox(height: 10),
-            const Text("Do you want to print it using the connected Bluetooth printer?"),
+            const Text("Do you want to preview and print it?"),
           ],
         ),
         actions: [
@@ -80,11 +81,11 @@ class _HomePageState extends State<HomePage> {
             child: const Text("Cancel"),
           ),
           ElevatedButton.icon(
-            icon: const Icon(Icons.print),
-            label: const Text("Print Now"),
+            icon: const Icon(Icons.preview),
+            label: const Text("Preview & Print"),
             onPressed: () {
               Navigator.pop(ctx);
-              _processAndPrintSharedFile(filePath);
+              _navigateToPreview(filePath);
             },
           )
         ],
@@ -92,75 +93,18 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _processAndPrintSharedFile(String path) async {
-    final lang = Provider.of<LanguageService>(context, listen: false);
-
-    if (_connectedMac == null) {
-      _showSnackBar(lang.translate('msg_disconnected'));
-      return;
-    }
-
-    setState(() => _isConnecting = true);
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // Default to 384 dots (58mm) if not set
-      final int printerWidth = prefs.getInt('printer_width_dots') ?? 384; 
-
-      List<int> bytesToPrint = [];
-      
-      // Initialize Printer
-      bytesToPrint += [27, 64]; 
-      bytesToPrint += [27, 97, 1]; // Center Align
-
-      img.Image? sourceImage;
-
-      // 1. Handle PDF
-      if (path.toLowerCase().endsWith('.pdf')) {
-        _showSnackBar("Processing PDF...");
-        final pdfBytes = File(path).readAsBytesSync();
-        
-        // Rasterize the first page of the PDF to a PNG image
-        // 203 DPI is standard for thermal printers
-        await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
-          final pngBytes = await page.toPng();
-          sourceImage = img.decodeImage(pngBytes);
-          break; // Print only the first page for this demo
-        }
-      } 
-      // 2. Handle Images
-      else {
-         _showSnackBar("Processing Image...");
-         final fileBytes = File(path).readAsBytesSync();
-         sourceImage = img.decodeImage(fileBytes);
-      }
-
-      if (sourceImage != null) {
-        // Resize to fit printer width (maintain aspect ratio)
-        sourceImage = img.copyResize(sourceImage, width: printerWidth);
-        
-        // Convert to Grayscale
-        sourceImage = img.grayscale(sourceImage);
-
-        // Convert to ESC/POS Bytes (GS v 0)
-        bytesToPrint += PrintUtils.imageToEscPos(sourceImage);
-      } else {
-        throw Exception("Could not decode image/pdf");
-      }
-
-      // Feed and Cut
-      bytesToPrint += [10, 10, 10]; // Feed 3 lines
-      bytesToPrint += [29, 86, 66, 0]; // Cut
-
-      // Send to Printer
-      await _printerService.sendBytes(bytesToPrint);
-      _showSnackBar("Print Sent Successfully!");
-
-    } catch (e) {
-      _showSnackBar("Error printing file: $e");
-    } finally {
-      setState(() => _isConnecting = false);
-    }
+  void _navigateToPreview(String filePath) {
+    // Navigate to the new PDF/Image Viewer Page
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PdfViewerPage(
+          filePath: filePath,
+          printerService: _printerService,
+          connectedMac: _connectedMac,
+        ),
+      ),
+    );
   }
 
   // ==========================================
@@ -207,8 +151,10 @@ class _HomePageState extends State<HomePage> {
           if (devices.isNotEmpty) {
             if (autoSelectMac != null) {
               try {
+                // Try to find the device object in the list that matches the MAC
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == autoSelectMac);
               } catch (e) {
+                 // Fallback if not found in bonded list
                  _selectedPairedDevice = BluetoothInfo(name: "Selected Device", macAdress: autoSelectMac);
                  _pairedDevices.add(_selectedPairedDevice!);
               }
@@ -278,6 +224,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- UPDATED TOGGLE CONNECTION METHOD ---
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
     final lang = Provider.of<LanguageService>(context, listen: false);
@@ -286,11 +233,15 @@ class _HomePageState extends State<HomePage> {
 
     String selectedMac = _selectedPairedDevice!.macAdress;
     String selectedName = _selectedPairedDevice!.name;
+    
+    // Check if we are currently connected to the device selected in the dropdown
     bool isCurrentlyConnectedToSelection = (_connectedMac == selectedMac);
+    
     final prefs = await SharedPreferences.getInstance();
 
     try {
       if (isCurrentlyConnectedToSelection) {
+        // --- CASE 1: USER WANTS TO DISCONNECT ---
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
         await prefs.remove('selected_printer_name'); 
@@ -303,12 +254,42 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
-        if (_connectedMac != null) {
-          await _printerService.disconnect();
-          await Future.delayed(const Duration(milliseconds: 300));
+        // --- CASE 2: USER WANTS TO CONNECT (NEW DEVICE) ---
+
+        // 1. FORCE DISCONNECT FIRST
+        // This clears any stuck sockets from previous sessions
+        await _printerService.disconnect();
+        
+        // Give the OS a moment to release the resource (Android specific safety)
+        if (Platform.isAndroid) {
+           await Future.delayed(const Duration(milliseconds: 200));
         }
 
-        bool success = await _printerService.connect(selectedMac);
+        bool success = false;
+
+        if (Platform.isAndroid) {
+           // --- ANDROID RETRY MECHANISM ---
+           try {
+             // Attempt 1
+             success = await _printerService.connect(selectedMac);
+           } catch (e) {
+             debugPrint("Attempt 1 failed: $e");
+           }
+
+           if (!success) {
+             debugPrint("Attempt 1 failed. Retrying in 500ms...");
+             await Future.delayed(const Duration(milliseconds: 500));
+             try {
+               // Attempt 2
+               success = await _printerService.connect(selectedMac);
+             } catch (e) {
+               debugPrint("Attempt 2 failed: $e");
+             }
+           }
+        } else {
+           // --- iOS LOGIC (Standard) ---
+           success = await _printerService.connect(selectedMac);
+        }
 
         if (success) {
           await prefs.setString('selected_printer_mac', selectedMac);
@@ -322,6 +303,7 @@ class _HomePageState extends State<HomePage> {
             _showSnackBar("${lang.translate('msg_connected')} $selectedName");
           }
         } else {
+          // Connection failed after retries
           await prefs.remove('selected_printer_mac');
           await prefs.remove('selected_printer_name');
           if (mounted) {
@@ -360,6 +342,7 @@ class _HomePageState extends State<HomePage> {
         mac = result;
       }
 
+      // Reload list to ensure the new device is in the dropdown
       await _loadBondedDevices(autoSelectMac: mac);
       
       if (deviceResult != null) {
@@ -367,15 +350,19 @@ class _HomePageState extends State<HomePage> {
           await prefs.setString('selected_printer_name', name);
           await prefs.setString('selected_printer_mac', mac);
 
+          final lang = Provider.of<LanguageService>(context, listen: false);
+
           setState(() {
+            // Explicitly sync the selected device and connected MAC
+            // This ensures the button in Section 1 updates to "Disconnect"
             _selectedPairedDevice = deviceResult;
             _connectedMac = mac; 
           });
           
-          final lang = Provider.of<LanguageService>(context, listen: false);
           _showSnackBar("${lang.translate('msg_connected')} $name");
       }
     } else {
+      // Just reload list if back button pressed
       _loadBondedDevices();
     }
   }
