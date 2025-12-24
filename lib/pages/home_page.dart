@@ -3,10 +3,6 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-// 1. PREFIXES TO RESOLVE CONFLICT & DETECT STATE
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart' as fbs;
-import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
-
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,7 +21,7 @@ import '../services/language_service.dart';
 import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
-import 'pdf_viewer_ios.dart'; 
+import 'pdf_viewer_ios.dart'; // Import the new preview page
 
 class HomePage extends StatefulWidget {
   final String? sharedFilePath;
@@ -44,67 +40,14 @@ class _HomePageState extends State<HomePage> {
   bool _isLoadingPaired = false;
   bool _isConnecting = false;
 
-  // --- NEW: Bluetooth State Variables ---
-  bool _isBluetoothOn = false;
-  StreamSubscription? _btStateSubscription;
-
   @override
   void initState() {
     super.initState();
     _checkPermissions();
-    _initBluetoothListener(); // Initialize the state listener
 
     // --- UPDATED: Handle file on initial launch ---
     if (widget.sharedFilePath != null) {
       _handleSharedFile(widget.sharedFilePath!);
-    }
-  }
-
-  @override
-  void dispose() {
-    _btStateSubscription?.cancel();
-    super.dispose();
-  }
-
-  // --- NEW: Bluetooth Status Listener ---
-  void _initBluetoothListener() {
-    if (Platform.isAndroid) {
-      // Check initial state
-      fbs.FlutterBluetoothSerial.instance.isEnabled.then((isOn) {
-        if (mounted) setState(() => _isBluetoothOn = isOn ?? false);
-      });
-
-      // Listen for changes
-      _btStateSubscription = fbs.FlutterBluetoothSerial.instance.onStateChanged().listen((state) {
-        if (mounted) {
-          setState(() => _isBluetoothOn = state.isEnabled);
-        }
-      });
-    } else if (Platform.isIOS) {
-      // Check initial state
-      fbp.FlutterBluePlus.adapterState.first.then((state) {
-        if (mounted) setState(() => _isBluetoothOn = state == fbp.BluetoothAdapterState.on);
-      });
-
-      // Listen for changes
-      _btStateSubscription = fbp.FlutterBluePlus.adapterState.listen((state) {
-        if (mounted) {
-          setState(() => _isBluetoothOn = state == fbp.BluetoothAdapterState.on);
-        }
-      });
-    }
-  }
-
-  // --- NEW: Android Button Action (Toggle ON/OFF) ---
-  Future<void> _handleAndroidBluetoothToggle() async {
-    if (Platform.isAndroid) {
-      if (!_isBluetoothOn) {
-        // Request to turn ON
-        await fbs.FlutterBluetoothSerial.instance.requestEnable();
-      } else {
-        // Request to turn OFF
-        await fbs.FlutterBluetoothSerial.instance.requestDisable();
-      }
     }
   }
 
@@ -269,9 +212,9 @@ class _HomePageState extends State<HomePage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('selected_printer_mac'); 
       await prefs.remove('selected_printer_name'); 
-      await prefs.remove('printer_width_dots');     
+      await prefs.remove('printer_width_dots');    
       await prefs.remove('printer_dpi');            
-      await prefs.remove('printer_width_mode');     
+      await prefs.remove('printer_width_mode');    
       
       if (Platform.isIOS) {
         await prefs.remove('ios_saved_printers');
@@ -301,12 +244,6 @@ class _HomePageState extends State<HomePage> {
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
     final lang = Provider.of<LanguageService>(context, listen: false);
-
-    // Don't attempt connection if bluetooth is off
-    if (!_isBluetoothOn) {
-      _showSnackBar(lang.translate('msg_bt_on'));
-      return;
-    }
 
     setState(() => _isConnecting = true);
 
@@ -623,80 +560,29 @@ class _HomePageState extends State<HomePage> {
   Widget _buildAndroidConnectionManager(LanguageService lang, bool isSelectedDeviceConnected) {
     return Column(
       children: [
-        // --- 1. Bluetooth Status Indicator ---
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-          decoration: BoxDecoration(
-            color: _isBluetoothOn ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: _isBluetoothOn ? Colors.green : Colors.red, width: 1)
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(_isBluetoothOn ? Icons.bluetooth : Icons.bluetooth_disabled, 
-                   size: 16, 
-                   color: _isBluetoothOn ? Colors.green : Colors.red),
-              const SizedBox(width: 5),
-              Text(
-                "${lang.translate('bt_status')} ${_isBluetoothOn ? lang.translate('bt_on') : lang.translate('bt_off')}",
-                style: TextStyle(
-                  color: _isBluetoothOn ? Colors.green[800] : Colors.red[800],
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-
-        // --- 2. Bluetooth Toggle Button (Moved to Top) ---
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            icon: Icon(_isBluetoothOn ? Icons.bluetooth_connected : Icons.bluetooth_disabled),
-            label: Text(_isBluetoothOn ? lang.translate('btn_turn_off_bt') : lang.translate('btn_turn_on_bt')),
-            onPressed: _handleAndroidBluetoothToggle,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _isBluetoothOn ? Colors.green : Colors.redAccent,
-              foregroundColor: Colors.white,
-            ),
-          ),
-        ),
-        const SizedBox(height: 15),
-
-        // --- 3. Dropdown (Disabled if BT Off) ---
-        Opacity(
-          opacity: _isBluetoothOn ? 1.0 : 0.5,
-          child: AbsorbPointer(
-            absorbing: !_isBluetoothOn,
-            child: DropdownButton<BluetoothInfo>(
-              isExpanded: true,
-              hint: Text(lang.translate('select_hint')),
-              value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null) 
-                  ? _pairedDevices.firstWhere(
-                      (d) => d.macAdress == _selectedPairedDevice!.macAdress, 
-                      orElse: () => _pairedDevices.first
-                    ) 
-                  : null,
-              items: _pairedDevices.map((device) {
-                return DropdownMenuItem(
-                  value: device, 
-                  child: Text(device.name.isEmpty ? lang.translate('unknown_device') : device.name)
-                );
-              }).toList(),
-              onChanged: _isBluetoothOn ? (device) {
-                setState(() {
-                  _selectedPairedDevice = device;
-                });
-              } : null, // Disable change if BT off
-            ),
-          ),
+        DropdownButton<BluetoothInfo>(
+          isExpanded: true,
+          hint: Text(lang.translate('select_hint')),
+          value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null) 
+              ? _pairedDevices.firstWhere(
+                  (d) => d.macAdress == _selectedPairedDevice!.macAdress, 
+                  orElse: () => _pairedDevices.first
+                ) 
+              : null,
+          items: _pairedDevices.map((device) {
+            return DropdownMenuItem(
+              value: device, 
+              child: Text(device.name.isEmpty ? lang.translate('unknown_device') : device.name)
+            );
+          }).toList(),
+          onChanged: (device) {
+            setState(() {
+              _selectedPairedDevice = device;
+            });
+          },
         ),
         const SizedBox(height: 5),
         
-        // --- 4. Connect Button (Disabled if BT Off) ---
         ElevatedButton.icon(
           icon: _isConnecting
               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -705,15 +591,10 @@ class _HomePageState extends State<HomePage> {
               ? lang.translate('working')
               : (isSelectedDeviceConnected ? lang.translate('disconnect') : lang.translate('connect_selected'))),
           style: ElevatedButton.styleFrom(
-            backgroundColor: _isBluetoothOn 
-                ? (isSelectedDeviceConnected ? Colors.redAccent : Colors.green) 
-                : Colors.grey, // Grey if BT off
+            backgroundColor: isSelectedDeviceConnected ? Colors.redAccent : Colors.green,
             foregroundColor: Colors.white,
           ),
-          // Disable button if BT off OR if already connecting OR if no device selected
-          onPressed: (!_isBluetoothOn || _selectedPairedDevice == null || _isConnecting) 
-              ? null 
-              : _toggleConnection,
+          onPressed: (_selectedPairedDevice == null || _isConnecting) ? null : _toggleConnection,
         ),
         
         if (_connectedMac != null)
@@ -730,13 +611,10 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         const Divider(),
-
-        // --- 5. Search Button ---
         OutlinedButton.icon(
             icon: const Icon(Icons.search),
             label: Text(lang.translate('search_devices')),
-            // Optionally disable search if BT is off, or let it prompt user (kept enabled to prompt)
-            onPressed: _isBluetoothOn ? _navigateToScanPage : () => _showSnackBar(lang.translate('msg_bt_on'))
+            onPressed: _navigateToScanPage
         ),
       ],
     );
@@ -746,17 +624,7 @@ class _HomePageState extends State<HomePage> {
     if (_connectedMac == null) {
       return Column(
         children: [
-          // --- NEW: Bluetooth Status Indicator for iOS ---
-          Text(
-             "${lang.translate('bt_status')} ${_isBluetoothOn ? lang.translate('bt_on') : lang.translate('bt_off')}",
-             style: TextStyle(
-               color: _isBluetoothOn ? Colors.green : Colors.red,
-               fontWeight: FontWeight.bold,
-               fontSize: 12
-             ),
-          ),
           const SizedBox(height: 10),
-
           const Icon(Icons.bluetooth_searching, size: 50, color: Colors.blueGrey),
           const SizedBox(height: 10),
           Text(

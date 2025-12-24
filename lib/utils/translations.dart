@@ -21,14 +21,6 @@ class AppTranslations {
       'connected_to': 'Connected to',
       'connected_other': 'Connected to another device',
       'search_devices': 'Search for Devices',
-      
-      // NEW TRANSLATIONS
-      'bt_status': 'Bluetooth Status:',
-      'bt_on': 'ON',
-      'bt_off': 'OFF',
-      'btn_turn_on_bt': 'Turn ON Bluetooth',
-      'btn_turn_off_bt': 'Turn OFF Bluetooth', // Added
-      'btn_bt_settings': 'Bluetooth Settings',
 
       // Section 2
       'sec_native': '2. Print Test',
@@ -141,14 +133,6 @@ class AppTranslations {
       'connected_to': 'Disambungkan ke',
       'connected_other': 'Disambungkan ke peranti lain',
       'search_devices': 'Carian Peranti',
-      
-      // NEW TRANSLATIONS
-      'bt_status': 'Status Bluetooth:',
-      'bt_on': 'HIDUP',
-      'bt_off': 'PADAM',
-      'btn_turn_on_bt': 'Hidupkan Bluetooth',
-      'btn_turn_off_bt': 'Padamkan Bluetooth', // Added
-      'btn_bt_settings': 'Tetapan Bluetooth',
 
       // Section 2
       'sec_native': '2. Ujian Cetakan',
