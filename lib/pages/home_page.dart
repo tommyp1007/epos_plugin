@@ -21,7 +21,9 @@ import '../services/language_service.dart';
 import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
-import 'pdf_viewer_ios.dart'; // Import the new preview page
+
+// --- UPDATED: Import the new generic viewer page ---
+import 'pdf_viewer_ios.dart'; 
 
 class HomePage extends StatefulWidget {
   final String? sharedFilePath;
@@ -71,22 +73,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ==========================================
-  // SHARED FILE HANDLING LOGIC
+  // SHARED FILE HANDLING LOGIC (UPDATED)
   // ==========================================
   void _showSharedFileDialog(String filePath) {
+    // Check if it is a website URL or a local file path
+    bool isUrl = filePath.toLowerCase().startsWith('http');
+    String displayName = isUrl ? "Website Document" : filePath.split('/').last;
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text("File Received"),
+        title: const Text("Content Received"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("A file was shared from another app."),
+            Text(isUrl 
+              ? "A link was shared from a website." 
+              : "A file was shared from another app."),
             const SizedBox(height: 10),
-            // Show only the filename for cleanliness
-            Text("File: ${filePath.split('/').last}", 
+            // Show filename or generic name
+            Text("Source: $displayName", 
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
             const SizedBox(height: 10),
             const Text("Do you want to preview and print it?"),
