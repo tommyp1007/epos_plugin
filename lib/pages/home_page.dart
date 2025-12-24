@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert'; // REQUIRED FOR IOS PRINTING
 
 import 'package:flutter/material.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -53,20 +54,14 @@ class _HomePageState extends State<HomePage> {
         Permission.bluetooth,
       ].request();
     }
-    // Load devices after permissions are granted
     _loadBondedDevices();
   }
 
-  /// Loads devices. For iOS, this relies on the PrinterService fetching
-  /// locally saved devices since iOS doesn't return system paired devices.
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
     
     try {
-      // 1. Get the list (Android: System Bonded / iOS: App Saved)
       List<BluetoothInfo> devices = await _printerService.getBondedDevices();
-      
-      // 2. Get the last used printer from storage to auto-select
       final prefs = await SharedPreferences.getInstance();
       final String? lastUsedMac = prefs.getString('selected_printer_mac');
 
@@ -87,9 +82,7 @@ class _HomePageState extends State<HomePage> {
             else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
                try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
-                // If we found the last used device, mark it as "connected" visually if logic permits
-                // (Optional: usually we only mark connected if we actually verify connection)
-                _connectedMac = lastUsedMac; 
+                // Note: We don't auto-set _connectedMac here to ensure connection is fresh
               } catch (e) {
                 _selectedPairedDevice = devices.first;
               }
@@ -99,7 +92,6 @@ class _HomePageState extends State<HomePage> {
               if (_selectedPairedDevice == null) {
                 _selectedPairedDevice = devices.first;
               } else {
-                // Ensure current selection is still valid in the new list
                 bool exists = devices.any((d) => d.macAdress == _selectedPairedDevice!.macAdress);
                 if (!exists) _selectedPairedDevice = devices.first;
               }
@@ -112,9 +104,7 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       debugPrint("Error loading bonded devices: $e");
     } finally {
-      if (mounted) {
-        setState(() => _isLoadingPaired = false);
-      }
+      if (mounted) setState(() => _isLoadingPaired = false);
     }
   }
 
@@ -124,39 +114,29 @@ class _HomePageState extends State<HomePage> {
     final lang = Provider.of<LanguageService>(context, listen: false);
 
     try {
-      // 1. Disconnect Printer
       await _printerService.disconnect();
 
-      // 2. Clear Preferences (EXCEPT LANGUAGE)
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('selected_printer_mac'); // Clear connection memory
-      await prefs.remove('printer_width_dots');   // Clear Section 3 Config
-      await prefs.remove('printer_dpi');          // Clear Section 3 Config
-      await prefs.remove('printer_width_mode');   // Clear Auto-detect Config
+      await prefs.remove('selected_printer_mac'); 
+      await prefs.remove('printer_width_dots');   
+      await prefs.remove('printer_dpi');          
+      await prefs.remove('printer_width_mode');   
       
-      // On iOS, we might want to clear the saved list too if it's a "Full Reset"
       if (Platform.isIOS) {
         await prefs.remove('ios_saved_printers');
       }
 
-      // 3. Reset UI State
       if (mounted) {
         setState(() {
           _connectedMac = null;
           _selectedPairedDevice = null;
           _isConnecting = false;
         });
-      }
-
-      // 4. Reload Paired Devices (This will be empty on iOS after clear)
-      await _loadBondedDevices();
-
-      // 5. Show Feedback
-      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(lang.translate('msg_reset_defaults')))
         );
       }
+      await _loadBondedDevices();
 
     } catch (e) {
       debugPrint("Error refreshing: $e");
@@ -165,9 +145,9 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- CONNECT / DISCONNECT ---
   Future<void> _toggleConnection() async {
     if (_selectedPairedDevice == null) return;
-
     final lang = Provider.of<LanguageService>(context, listen: false);
 
     setState(() => _isConnecting = true);
@@ -178,7 +158,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       if (isCurrentlyConnectedToSelection) {
-        // --- DISCONNECT LOGIC ---
+        // Disconnect
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
 
@@ -190,27 +170,24 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
-        // --- CONNECT LOGIC ---
+        // Connect
         if (_connectedMac != null) {
           await _printerService.disconnect();
-          await Future.delayed(const Duration(milliseconds: 500));
+          await Future.delayed(const Duration(milliseconds: 300));
         }
 
-        // Use the Service to connect (It handles iOS BLE vs Android Classic)
         bool success = await _printerService.connect(selectedMac);
 
         if (success) {
           await prefs.setString('selected_printer_mac', selectedMac);
-
           if (mounted) {
             setState(() {
-              _connectedMac = selectedMac;
+              _connectedMac = selectedMac; // FORCE UI UPDATE
               _isConnecting = false;
             });
             _showSnackBar("${lang.translate('msg_connected')} ${_selectedPairedDevice!.name}");
           }
         } else {
-          // If failed, remove from prefs
           await prefs.remove('selected_printer_mac');
           if (mounted) {
             setState(() {
@@ -234,17 +211,48 @@ class _HomePageState extends State<HomePage> {
       context,
       MaterialPageRoute(builder: (context) => const ScanDevicesPage()),
     );
-    // If we get a MAC address back (Meaning we connected in the scan page), reload list
     if (result is String) {
-      _loadBondedDevices(autoSelectMac: result);
-    } else if (result == true) {
+      // If we got a MAC address back, reload list and set connected
+      await _loadBondedDevices(autoSelectMac: result);
+      setState(() {
+        _connectedMac = result;
+      });
+    } else {
       _loadBondedDevices();
     }
   }
 
+  // --- TEST PRINT FUNCTION ---
   Future<void> _testNativePrintService() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
+    // --- IOS FIX: Send Raw Bytes via BLE (Bypass AirPrint) ---
+    if (Platform.isIOS) {
+      if (_connectedMac == null) {
+        _showSnackBar("Please connect a printer in Section 1 first.");
+        return;
+      }
+
+      try {
+        // ESC/POS Commands
+        List<int> bytes = [];
+        bytes += [27, 64]; // Initialize
+        bytes += [27, 97, 1]; // Align Center
+        bytes += utf8.encode("\n--- TEST PRINT ---\n");
+        bytes += utf8.encode("iOS Direct Connection\n");
+        bytes += utf8.encode("Works without AirPrint!\n");
+        bytes += utf8.encode("----------------------\n\n\n");
+        bytes += [29, 86, 66, 0]; // Cut Paper / Feed
+
+        await _printerService.sendBytes(bytes);
+        _showSnackBar("Sent to printer!");
+      } catch (e) {
+        _showSnackBar("Print Error: $e");
+      }
+      return; 
+    }
+
+    // --- ANDROID: Use System Print Service (As requested previously) ---
     try {
       final prefs = await SharedPreferences.getInstance();
       final int inputDots = prefs.getInt('printer_width_dots') ?? 384;
@@ -400,7 +408,6 @@ class _HomePageState extends State<HomePage> {
                       DropdownButton<BluetoothInfo>(
                         isExpanded: true,
                         hint: Text(lang.translate('select_hint')),
-                        // Ensure value matches an item in the list or is null
                         value: (_pairedDevices.isNotEmpty && _selectedPairedDevice != null) 
                             ? _pairedDevices.firstWhere(
                                 (d) => d.macAdress == _selectedPairedDevice!.macAdress, 
@@ -433,7 +440,6 @@ class _HomePageState extends State<HomePage> {
                           backgroundColor: isSelectedDeviceConnected ? Colors.redAccent : Colors.green,
                           foregroundColor: Colors.white,
                         ),
-                        // Disable button if no device selected or currently processing
                         onPressed: (_selectedPairedDevice == null || _isConnecting) ? null : _toggleConnection,
                       ),
                       
