@@ -45,17 +45,33 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _checkPermissions();
 
-    // --- CHECK FOR SHARED FILE ---
+    // --- UPDATED: Handle file on initial launch ---
     if (widget.sharedFilePath != null) {
-      // Delay slightly to ensure context is ready
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _showSharedFileDialog(widget.sharedFilePath!);
-      });
+      _handleSharedFile(widget.sharedFilePath!);
     }
   }
 
+  // --- UPDATED: Handle file when app is already running (background) ---
+  @override
+  void didUpdateWidget(HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.sharedFilePath != null && widget.sharedFilePath != oldWidget.sharedFilePath) {
+      _handleSharedFile(widget.sharedFilePath!);
+    }
+  }
+
+  // --- UPDATED: Centralized Shared File Logic ---
+  void _handleSharedFile(String path) {
+    // Delay slightly to ensure context is ready
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        _showSharedFileDialog(path);
+      }
+    });
+  }
+
   // ==========================================
-  // SHARED FILE HANDLING LOGIC (UPDATED)
+  // SHARED FILE HANDLING LOGIC
   // ==========================================
   void _showSharedFileDialog(String filePath) {
     showDialog(
@@ -69,7 +85,9 @@ class _HomePageState extends State<HomePage> {
           children: [
             const Text("A file was shared from another app."),
             const SizedBox(height: 10),
-            Text("Path: ${filePath.split('/').last}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            // Show only the filename for cleanliness
+            Text("File: ${filePath.split('/').last}", 
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
             const SizedBox(height: 10),
             const Text("Do you want to preview and print it?"),
           ],
@@ -94,14 +112,13 @@ class _HomePageState extends State<HomePage> {
 
   void _navigateToPreview(String filePath) {
     // Navigate to the new PDF/Image Viewer Page
-    // We pass the _printerService and the current _connectedMac
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => PdfViewerPage(
           filePath: filePath,
           printerService: _printerService,
-          connectedMac: _connectedMac, // Passing the connected status from Section 1
+          connectedMac: _connectedMac, // Passing the connected status
         ),
       ),
     );
@@ -161,10 +178,6 @@ class _HomePageState extends State<HomePage> {
             else if (lastUsedMac != null && devices.any((d) => d.macAdress == lastUsedMac)) {
                try {
                 _selectedPairedDevice = devices.firstWhere((d) => d.macAdress == lastUsedMac);
-                
-                // IMPORTANT: If we found a last used device, we can attempt to simulate connection state 
-                // if the service reports it's connected (optional enhancement), 
-                // but for now we just select it in the dropdown.
               } catch (e) {
                 _selectedPairedDevice = devices.first;
               }

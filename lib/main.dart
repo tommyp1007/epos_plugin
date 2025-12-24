@@ -103,12 +103,25 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
+  // --- UPDATED: CLEAN PATH LOGIC FOR IOS ---
   void _processShareResult(List<SharedFile> files, String source) {
     if (files.isNotEmpty) {
       final firstFile = files.first;
-      final path = firstFile.value;
+      String? path = firstFile.value;
 
       if (path != null && path.isNotEmpty) {
+        // iOS Fix: Remove file:// prefix if present
+        if (Platform.isIOS && path.startsWith("file://")) {
+          path = path.replaceFirst("file://", "");
+        }
+        
+        // General Fix: Decode URL characters (e.g. %20 -> space)
+        try {
+          path = Uri.decodeFull(path!);
+        } catch (e) {
+          print("Error decoding path: $e");
+        }
+
         setState(() {
           _sharedFilePath = path;
         });
