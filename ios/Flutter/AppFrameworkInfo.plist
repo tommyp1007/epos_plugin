@@ -12,7 +12,7 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>MyInvois e-Pos Printer</string>
-    <key>CFBundleDisplayName</key>
+	<key>CFBundleDisplayName</key>
 	<string>MyInvois e-Pos Printer</string>
 	<key>CFBundlePackageType</key>
 	<string>FMWK</string>
@@ -25,53 +25,58 @@
 	<key>MinimumOSVersion</key>
 	<string>13.0</string>
 
+    <key>UISupportsDocumentBrowser</key>
+	<true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>This app needs Bluetooth access to scan for and connect to MyInvois e-Pos printers.</string>
-    <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>This app needs Bluetooth access to scan for and connect to MyInvois e-Pos printers.</string>
+	<string>This app needs Bluetooth access to scan for and connect to MyInvois e-Pos printers.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app needs Bluetooth access to scan for and connect to MyInvois e-Pos printers.</string>
 
     <key>CFBundleDocumentTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>Images</string>
-            <key>LSHandlerRank</key>
-            <string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>public.image</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>PDF</string>
-            <key>LSHandlerRank</key>
-            <string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>com.adobe.pdf</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>Text</string>
-            <key>LSHandlerRank</key>
-            <string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>public.plain-text</string>
-            </array>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>Data</string>
-            <key>LSHandlerRank</key>
-            <string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>public.data</string>
-            </array>
-        </dict>
-    </array>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Images</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.image</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Text</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Data</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
