@@ -103,29 +103,39 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  // --- UPDATED: CLEAN PATH LOGIC FOR IOS ---
+  // --- UPDATED: SMART PROCESSING (URL vs FILE) ---
   void _processShareResult(List<SharedFile> files, String source) {
     if (files.isNotEmpty) {
       final firstFile = files.first;
-      String? path = firstFile.value;
+      String? path = firstFile.value; // value contains the Text (URL) or Path
 
       if (path != null && path.isNotEmpty) {
-        // iOS Fix: Remove file:// prefix if present
-        if (Platform.isIOS && path.startsWith("file://")) {
-          path = path.replaceFirst("file://", "");
-        }
         
-        // General Fix: Decode URL characters (e.g. %20 -> space)
-        try {
-          path = Uri.decodeFull(path!);
-        } catch (e) {
-          print("Error decoding path: $e");
+        // CHECK 1: Is it a Website Link? (http/https)
+        // If it's a URL, we want to keep it exactly as is (no decoding).
+        if (path.toLowerCase().startsWith("http")) {
+            // Keep path as-is
+            print("Detected Web Link: $path");
+        } 
+        // CHECK 2: Is it a Local File?
+        else {
+            // iOS Fix: Remove file:// prefix if present
+            if (Platform.isIOS && path.startsWith("file://")) {
+              path = path.replaceFirst("file://", "");
+            }
+            
+            // General Fix: Decode URI chars (e.g. %20 -> space) for local files
+            try {
+              path = Uri.decodeFull(path!);
+            } catch (e) {
+              print("Error decoding path: $e");
+            }
         }
 
         setState(() {
           _sharedFilePath = path;
         });
-        print("Received file via Share ($source): $path");
+        print("Received content via Share ($source): $path");
       }
     }
   }
