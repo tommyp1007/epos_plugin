@@ -50,6 +50,7 @@ post_install do |installer|
 
       # 2. Permission Handler Macros
       # This enables the specific permission logic in the binary.
+      # Without these, calling Permission.bluetooth.request() would fail.
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
         
@@ -59,7 +60,7 @@ post_install do |installer|
         # Enable App Tracking Transparency (Required for App Store submission if tracking)
         'PERMISSION_APP_TRACKING_TRANSPARENCY=1',
         
-        # Enable Bluetooth (Thermal Printers)
+        # Enable Bluetooth (Required for Thermal Printers)
         'PERMISSION_BLUETOOTH=1',
       ]
     end
