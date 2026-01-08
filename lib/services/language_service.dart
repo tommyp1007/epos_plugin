@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// Helper for Step 2 import (put this at top of file)
-import '../utils/translations.dart';
+// Helper for translations import
+import '../utils/translations.dart'; 
 
 class LanguageService with ChangeNotifier {
   // Default to English
@@ -21,8 +21,8 @@ class LanguageService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Switch Language and Save to Storage
-  Future<void> switchLanguage(String languageCode) async {
+  // Method renamed to 'setLanguage' to match your AppInfoPage usage
+  Future<void> setLanguage(String languageCode) async {
     _currentLanguage = languageCode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language_code', _currentLanguage);
@@ -31,8 +31,7 @@ class LanguageService with ChangeNotifier {
 
   // Helper to get text easily
   String translate(String key) {
-    // Import your translations file here
-    // Assuming you implemented Step 2
+    // Uses the AppTranslations class from your utils
     return AppTranslations.text(key, _currentLanguage); 
   }
 }

@@ -1,5 +1,7 @@
-package com.example.epos_print_plugin // TODO: Make sure this matches your folder structure
+package com.example.epos_print_plugin
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
@@ -16,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import android.print.PrintAttributes
 import android.print.PrintAttributes.MediaSize
 import android.print.PrintAttributes.Resolution
@@ -26,20 +29,27 @@ import android.printservice.PrintJob
 import android.printservice.PrintService
 import android.printservice.PrinterDiscoverySession
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.min
 
 class MyPrintService : PrintService() {
 
     companion object {
-        private const val TAG = "MyPrintService"
+        private const val TAG = "EposPrinterService"
         private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        
+        // NOTIFICATION CONFIG
+        private const val CHANNEL_ID = "epos_print_channel"
+        private const val NOTIFICATION_ID = 8888
         
         // =================================================================
         // WIDTH CONFIGURATION
@@ -47,7 +57,9 @@ class MyPrintService : PrintService() {
         private const val WIDTH_58MM = 384
         private const val WIDTH_80MM = 576
         
-        // ESC/POS Commands
+        // =================================================================
+        // ESC/POS COMMANDS
+        // =================================================================
         private val INIT_PRINTER = byteArrayOf(0x1B, 0x40)
         private val FEED_PAPER = byteArrayOf(0x1B, 0x64, 0x04) 
         private val CUT_PAPER = byteArrayOf(0x1D, 0x56, 0x42, 0x00)
@@ -55,6 +67,52 @@ class MyPrintService : PrintService() {
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    
+    // TRACKING QUEUE SIZE
+    private val activeJobCount = AtomicInteger(0)
+    
+    // Volatile flag to control the input stream reader thread
+    @Volatile
+    private var isReaderRunning = false
+
+    // --- NOTIFICATION MANAGER SETUP ---
+    private fun updateServiceNotification() {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // 1. Create Channel (Android 8+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Printer Service Status",
+                NotificationManager.IMPORTANCE_LOW // Low importance = No sound, just visual
+            )
+            channel.description = "Shows active printer queue status"
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        // 2. Manage Notification
+        val currentCount = activeJobCount.get()
+        
+        if (currentCount > 0) {
+            // SHOW NOTIFICATION
+            val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download) // Or your app icon
+                .setContentTitle("e-Pos Printer Running")
+                .setContentText("Printing in background... ($currentCount in queue)")
+                .setOngoing(false) // FALSE means user CAN swipe it away if they want
+                .setProgress(0, 0, true) // Indeterminate progress bar
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+
+            try {
+                notificationManager.notify(NOTIFICATION_ID, builder.build())
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Notification permission missing")
+            }
+        } else {
+            // CANCEL NOTIFICATION (Queue empty)
+            notificationManager.cancel(NOTIFICATION_ID)
+        }
+    }
 
     override fun onCreatePrinterDiscoverySession(): PrinterDiscoverySession {
         return object : PrinterDiscoverySession() {
@@ -62,13 +120,11 @@ class MyPrintService : PrintService() {
                 val printers = ArrayList<PrinterInfo>()
                 val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
 
-                // --- 1. GET SELECTED PRINTER FROM FLUTTER ---
-                // We use the file name "FlutterSharedPreferences" and key "flutter.selected_printer_mac"
-                // This is the standard way Flutter stores SharedPrefs on Android.
+                // --- 1. GET PREFERENCES ---
                 val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 val activeMac = prefs.getString("flutter.selected_printer_mac", "") ?: ""
 
-                // 2. HARDWARE DETECTION (For Built-in Sunmi V3)
+                // 2. HARDWARE DETECTION
                 val manufacturer = Build.MANUFACTURER.uppercase()
                 val model = Build.MODEL.uppercase()
                 val isSunmiHandheld = manufacturer.contains("SUNMI") && 
@@ -77,9 +133,7 @@ class MyPrintService : PrintService() {
                 // 3. DEFINE MEDIA SIZES
                 val mediaSunmi58 = MediaSize("SUNMI_58", "58mm (Small)", 2280, 50000)
                 val mediaSunmi80 = MediaSize("SUNMI_80", "80mm (Large)", 3150, 50000)
-                
-                // --- CUSTOM SETTING: "MyInvois e-Pos Printer" ---
-                val mediaEpos = MediaSize("EPOS_SETTING", "MyInvois e-Pos Printer", 8270, 11690)
+                val mediaEpos = MediaSize("EPOS_SETTING", "MyInvois e-Pos Printer", 3150, 23620)
                 val res203 = Resolution("R203", "Standard (203 dpi)", 203, 203)
 
                 fun addBluetoothPrinters() {
@@ -87,27 +141,20 @@ class MyPrintService : PrintService() {
                         try {
                             val bondedDevices = bluetoothAdapter.bondedDevices
                             for (device in bondedDevices) {
-                                
-                                // --- FILTERING LOGIC ---
-                                // If Flutter has a connected device (activeMac is not empty),
-                                // WE SKIP ALL OTHER DEVICES.
-                                // This forces the Android Print Dialog to only see the connected printer,
-                                // making it selected by default.
-                                if (activeMac.isNotEmpty() && device.address != activeMac) {
-                                    continue 
-                                }
+                                if (activeMac.isNotEmpty() && device.address != activeMac) continue 
 
                                 val printerId = generatePrinterId(device.address)
                                 val capsBuilder = PrinterCapabilitiesInfo.Builder(printerId)
-                                
                                 val devName = (device.name ?: "Unknown").uppercase()
                                 
                                 val likely80mm = devName.contains("80") || devName.contains("MTP-3") || devName.contains("T80")
-                                val likely58mm = devName.contains("58") || devName.contains("MTP-2") || devName.contains("MTP-II") 
-                                                                             || devName.contains("BLUETOOTH PRINTER") 
-                                                                             || isSunmiHandheld 
+                                val likely58mm = devName.contains("58") || 
+                                                 devName.contains("MTP-2") || 
+                                                 devName.contains("MTP-II") || 
+                                                 devName.contains("BLUETOOTH PRINTER") ||
+                                                 devName.contains("KPRINTER") ||
+                                                 isSunmiHandheld 
 
-                                // We add the physical sizes as options (isDefault = false)
                                 if (likely80mm) {
                                     capsBuilder.addMediaSize(mediaSunmi80, false)
                                     capsBuilder.addMediaSize(mediaSunmi58, false)
@@ -116,21 +163,13 @@ class MyPrintService : PrintService() {
                                     capsBuilder.addMediaSize(mediaSunmi80, false)
                                 }
                                 
-                                // --- DEFAULT MEDIA SETTING ---
-                                // Set "MyInvois e-Pos Printer" as DEFAULT (true)
                                 capsBuilder.addMediaSize(mediaEpos, true)
-                                
                                 capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)
                                 capsBuilder.addResolution(res203, true)
                                 capsBuilder.setMinMargins(PrintAttributes.Margins(0, 0, 0, 0))
 
-                                val info = PrinterInfo.Builder(
-                                    printerId, 
-                                    device.name ?: "BT Printer", 
-                                    PrinterInfo.STATUS_IDLE
-                                ).setCapabilities(capsBuilder.build()).build()
-
-                                printers.add(info)
+                                printers.add(PrinterInfo.Builder(printerId, device.name ?: "BT Printer", PrinterInfo.STATUS_IDLE)
+                                    .setCapabilities(capsBuilder.build()).build())
                             }
                         } catch (e: SecurityException) {
                             Log.e(TAG, "Permission denied")
@@ -143,14 +182,10 @@ class MyPrintService : PrintService() {
                 if (printers.isEmpty()) {
                     val dummyId = generatePrinterId("sunmi_virtual")
                     val capsBuilder = PrinterCapabilitiesInfo.Builder(dummyId)
-                    
-                    // Also set default here for virtual printer
                     capsBuilder.addMediaSize(mediaEpos, true)
-                    
                     capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)
                     capsBuilder.addResolution(res203, true)
                     capsBuilder.setMinMargins(PrintAttributes.Margins(0, 0, 0, 0))
-                    
                     printers.add(PrinterInfo.Builder(dummyId, "No Printer Found", PrinterInfo.STATUS_IDLE)
                         .setCapabilities(capsBuilder.build()).build())
                 }
@@ -181,19 +216,31 @@ class MyPrintService : PrintService() {
 
         printJob.start()
 
+        // --- INCREMENT QUEUE & SHOW NOTIFICATION ---
+        activeJobCount.incrementAndGet()
+        updateServiceNotification()
+
         executor.execute {
             var socket: BluetoothSocket? = null
             var success = false
             var errorMessage = ""
             var tempFile: File? = null
             var seekablePfd: ParcelFileDescriptor? = null
+            var wakeLock: PowerManager.WakeLock? = null
 
             try {
+                // --- WAKELOCK ---
+                try {
+                    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EposPrinter:QueueLock")
+                    wakeLock.acquire(180 * 1000L)
+                } catch (e: Exception) {
+                    Log.e(TAG, "WakeLock Error: ${e.message}")
+                }
+
                 val macAddress = printerId.localId
                 
-                // =================================================================
-                // 4. SMART AUTO DETECT WIDTH logic
-                // =================================================================
+                // --- WIDTH DETECTION ---
                 var printerName = "Unknown"
                 if (macAddress != "sunmi_virtual") {
                     val adapter = BluetoothAdapter.getDefaultAdapter()
@@ -205,13 +252,15 @@ class MyPrintService : PrintService() {
                 val model = Build.MODEL.uppercase()
                 val isSunmiV3 = manufacturer.contains("SUNMI") && (model.contains("V3") || model.contains("V2"))
 
-                val isGeneric58mm = printerName.contains("58") || printerName.contains("MTP-2") || 
-                                    printerName.contains("MTP-II") || printerName.contains("BLUETOOTH PRINTER") 
+                val isGeneric58mm = printerName.contains("58") || 
+                                    printerName.contains("MTP-2") || 
+                                    printerName.contains("MTP-II") || 
+                                    printerName.contains("BLUETOOTH PRINTER") ||
+                                    printerName.contains("KPRINTER")
 
                 val isGeneric80mm = printerName.contains("80") || printerName.contains("MTP-3") || 
                                     printerName.contains("T80")
 
-                // Shared Preferences Check
                 val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 val savedWidth = prefs.getLong("flutter.printer_width_dots", -1L)
                 val attributes = info.attributes
@@ -221,7 +270,6 @@ class MyPrintService : PrintService() {
 
                 if (savedWidth > 0) {
                     targetWidth = savedWidth.toInt()
-                    Log.d(TAG, "Width: Manual Override -> $targetWidth")
                 } 
                 else if (selectedMediaId == "SUNMI_80") {
                     targetWidth = WIDTH_80MM
@@ -230,7 +278,6 @@ class MyPrintService : PrintService() {
                     targetWidth = WIDTH_58MM
                 }
                 else {
-                    // Default logic fallback if EPOS_SETTING is selected but no manual override exists
                     if (isGeneric80mm) {
                         targetWidth = WIDTH_80MM
                     } else if (isGeneric58mm || isSunmiV3) {
@@ -238,9 +285,12 @@ class MyPrintService : PrintService() {
                     } else {
                         targetWidth = WIDTH_58MM 
                     }
+                    if (selectedMediaId == "EPOS_SETTING" && !isGeneric58mm && !isSunmiV3 && isGeneric80mm) {
+                         targetWidth = WIDTH_80MM
+                    }
                 }
 
-                tempFile = File(cacheDir, "web_print.pdf")
+                tempFile = File(cacheDir, "web_print_${System.currentTimeMillis()}.pdf")
                 seekablePfd = transferToTempFile(rawFileDescriptor, tempFile)
 
                 if (macAddress == "sunmi_virtual") {
@@ -250,20 +300,38 @@ class MyPrintService : PrintService() {
                     val adapter = BluetoothAdapter.getDefaultAdapter()
                     val device: BluetoothDevice = adapter.getRemoteDevice(macAddress)
                     
+                    // --- ROBUST CONNECT LOGIC (From Bt.java) ---
                     try {
+                        // Try Secure first
                         socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
                         socket.connect()
                     } catch (e: Exception) {
-                        errorMessage = "Connection Failed: ${e.message}"
-                        return@execute 
+                        Log.w(TAG, "Secure connect failed, trying Insecure...")
+                        try {
+                            // Try Insecure Fallback
+                            socket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+                            socket.connect()
+                        } catch (e2: Exception) {
+                            errorMessage = "Connection Failed: ${e2.message}"
+                            return@execute 
+                        }
                     }
 
-                    if (socket.isConnected) {
-                        val outputStream = socket.outputStream
-                        outputStream.write(INIT_PRINTER)
-                        Thread.sleep(50)
+                    if (socket?.isConnected == true) {
+                        val outputStream = socket!!.outputStream
+                        val inputStream = socket!!.inputStream
 
-                        // If process returns false (blank page), we don't cut paper
+                        // --- INPUT DRAINER (Critical Idea from rawbt) ---
+                        // Prevents buffer overflow if printer sends data back
+                        startInputDrainer(inputStream)
+
+                        // Wake up sequence
+                        Thread.sleep(500) 
+                        outputStream.write(byteArrayOf(0x00, 0x00, 0x00))
+                        Thread.sleep(100)
+                        outputStream.write(INIT_PRINTER)
+                        Thread.sleep(100) 
+
                         val hasContent = processPdfAndPrint(seekablePfd, outputStream, targetWidth)
 
                         if (hasContent) {
@@ -273,9 +341,14 @@ class MyPrintService : PrintService() {
                             Log.d(TAG, "Skipping Print - Page was Blank")
                         }
 
-                        try { Thread.sleep(1000) } catch (e: InterruptedException) { }
+                        // Delay to allow buffer to flush before closing
+                        try { Thread.sleep(1500) } catch (e: InterruptedException) { }
+                        
+                        // Stop reader
+                        isReaderRunning = false
+                        
                         outputStream.flush()
-                        socket.close()
+                        socket!!.close()
                         success = true
                     }
                 }
@@ -284,11 +357,21 @@ class MyPrintService : PrintService() {
                 errorMessage = "Error: ${e.message}"
                 Log.e(TAG, errorMessage, e)
             } finally {
+                // Cleanup
+                isReaderRunning = false
                 try { socket?.close() } catch (e: IOException) { }
                 try { seekablePfd?.close() } catch (e: IOException) { }
                 try { rawFileDescriptor?.close() } catch (e: IOException) { }
                 tempFile?.delete()
                 
+                if (wakeLock != null && wakeLock!!.isHeld) {
+                    try { wakeLock!!.release() } catch (e: Exception) { }
+                }
+                
+                // --- DECREMENT QUEUE & UPDATE NOTIFICATION ---
+                activeJobCount.decrementAndGet()
+                updateServiceNotification()
+
                 mainHandler.post {
                     if (success) {
                         if (!printJob.isCancelled) printJob.complete()
@@ -298,6 +381,33 @@ class MyPrintService : PrintService() {
                 }
             }
         }
+    }
+
+    /**
+     * Drains the input stream in a background thread.
+     * Based on rawbt's ReaderReceiver logic.
+     */
+    private fun startInputDrainer(inputStream: InputStream) {
+        isReaderRunning = true
+        Thread {
+            val buffer = ByteArray(1024)
+            while (isReaderRunning) {
+                try {
+                    if (inputStream.available() > 0) {
+                        inputStream.read(buffer)
+                        // In a full implementation, we could parse status here.
+                        // For now, we just drain it to keep the connection healthy.
+                    } else {
+                        Thread.sleep(50)
+                    }
+                } catch (e: IOException) {
+                    // Connection likely closed
+                    isReaderRunning = false
+                } catch (e: InterruptedException) {
+                    isReaderRunning = false
+                }
+            }
+        }.start()
     }
 
     @Throws(IOException::class)
@@ -310,7 +420,6 @@ class MyPrintService : PrintService() {
         return ParcelFileDescriptor.open(outputFile, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
-    // Returns TRUE if content was found and printed, FALSE if blank
     private fun processPdfAndPrint(
         fileDescriptor: ParcelFileDescriptor, 
         outputStream: OutputStream, 
@@ -322,6 +431,8 @@ class MyPrintService : PrintService() {
         var anyPagePrinted = false
 
         for (i in 0 until pagesToPrint) {
+            if (Thread.currentThread().isInterrupted) break
+
             val page = renderer.openPage(i)
             
             // 1. High-Res Capture
@@ -354,7 +465,6 @@ class MyPrintService : PrintService() {
             val trimmedBitmap = trimWhiteSpace(tempBitmap)
             
             if (trimmedBitmap == null) {
-                // Page was blank (or only noise)
                 tempBitmap.recycle()
                 continue
             }
@@ -368,23 +478,30 @@ class MyPrintService : PrintService() {
             }
 
             // 4. Send
-            if (finalBitmap.height > 5) {
-                val ditheredBytes = convertBitmapToEscPos(finalBitmap)
-                writeWithSplitting(outputStream, ditheredBytes, finalBitmap.width, finalBitmap.height)
-                anyPagePrinted = true
+            if (finalBitmap.height > 0) {
+                try {
+                    val ditheredBytes = convertBitmapToEscPos(finalBitmap)
+                    writeWithSplitting(outputStream, ditheredBytes, finalBitmap.width, finalBitmap.height)
+                    anyPagePrinted = true
+                } catch (e: IOException) {
+                    Log.e(TAG, "Print transmission failed", e)
+                    break 
+                }
             }
             
             if (!finalBitmap.isRecycled) finalBitmap.recycle()
             if (!tempBitmap.isRecycled) tempBitmap.recycle()
+
+            try { Thread.sleep(200) } catch (e: InterruptedException) { }
         }
         renderer.close()
         return anyPagePrinted
     }
 
     /**
-     * AUTO-ZOOM & CUT HELPER:
-     * Returns NULL if the page is effectively blank/white/noise.
-     * Returns Cropped Bitmap if content exists.
+     * UPDATED TRIMMER:
+     * High sensitivity (240 threshold) ensures faint borders/frames are preserved.
+     * Low pixel count (2) ensures thin lines are preserved.
      */
     private fun trimWhiteSpace(source: Bitmap): Bitmap? {
         val width = source.width
@@ -398,42 +515,31 @@ class MyPrintService : PrintService() {
         var maxY = 0
         var foundContent = false
 
-        // --- NOISE FILTER THRESHOLDS ---
-        // 1. Pixel Darkness: Must be darker than 128 (Mid Grey) to be valid
-        val darknessThreshold = 128
-        // 2. Line Noise: A horizontal line needs > 5 dark pixels to be "Content"
-        val minDarkPixelsPerRow = 5
+        // Threshold 240: Anything darker than "almost pure white" is considered content.
+        // This ensures light gray frames or borders are NOT cropped.
+        val darknessThreshold = 240
+        val minDarkPixelsPerRow = 2 // Detect even thin lines
 
         for (y in 0 until height) {
             var darkPixelsInRow = 0
-            
-            // Scan row
             for (x in 0 until width) {
                 val pixel = pixels[y * width + x]
                 val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                
-                // Check if pixel is dark
-                if (r < darknessThreshold || g < darknessThreshold || b < darknessThreshold) {
+                // Check if pixel is NOT white
+                if (r < darknessThreshold) {
                     darkPixelsInRow++
                 }
             }
 
-            // If this row has enough dark pixels, we count it as content
-            if (darkPixelsInRow > minDarkPixelsPerRow) {
+            if (darkPixelsInRow >= minDarkPixelsPerRow) {
                 foundContent = true
                 if (y < minY) minY = y
                 if (y > maxY) maxY = y
                 
-                // We also need to find X bounds (we can approximate X bounds based on the valid row)
-                // Re-scanning X is expensive, so strictly speaking we can optimize, 
-                // but usually Y cropping is what matters for paper saving.
-                // For X, we'll just check the whole valid row.
                 for (x in 0 until width) {
                     val pixel = pixels[y * width + x]
                     val r = (pixel shr 16) and 0xFF
-                    if (r < darknessThreshold) { // Simple check since we know row is valid
+                    if (r < darknessThreshold) { 
                         if (x < minX) minX = x
                         if (x > maxX) maxX = x
                     }
@@ -441,14 +547,14 @@ class MyPrintService : PrintService() {
             }
         }
 
-        // --- BLANK PAGE CHECK ---
         if (!foundContent) return null 
 
         val padding = 5
         minX = max(0, minX - padding)
         maxX = min(width, maxX + padding)
         minY = max(0, minY - padding)
-        maxY = min(height, maxY + padding + 40) // Bottom padding for cutter
+        // Add bottom padding for cutter
+        maxY = min(height, maxY + padding + 40) 
 
         val trimWidth = maxX - minX
         val trimHeight = maxY - minY
@@ -460,7 +566,8 @@ class MyPrintService : PrintService() {
 
     private fun writeWithSplitting(outputStream: OutputStream, data: ByteArray, width: Int, height: Int) {
         val widthBytes = (width + 7) / 8
-        val linesPerChunk = 200
+        // Safe chunk size (30 lines ~ 2KB)
+        val linesPerChunk = 30 
         
         var currentY = 0
         var offset = 0
@@ -469,20 +576,29 @@ class MyPrintService : PrintService() {
             val linesToSend = min(linesPerChunk, height - currentY)
             val chunkDataSize = linesToSend * widthBytes
             
-            outputStream.write(byteArrayOf(0x1D, 0x76, 0x30, 0x00))
-            outputStream.write(byteArrayOf((widthBytes % 256).toByte(), (widthBytes / 256).toByte()))
-            outputStream.write(byteArrayOf((linesToSend % 256).toByte(), (linesToSend / 256).toByte()))
+            // GS v 0 m xL xH yL yH
+            val header = byteArrayOf(
+                0x1D, 0x76, 0x30, 0x00,
+                (widthBytes % 256).toByte(), (widthBytes / 256).toByte(),
+                (linesToSend % 256).toByte(), (linesToSend / 256).toByte()
+            )
             
+            outputStream.write(header)
             outputStream.write(data, offset, chunkDataSize)
             outputStream.flush()
             
             offset += chunkDataSize
             currentY += linesToSend
             
-            try { Thread.sleep(30) } catch (e: InterruptedException) { }
+            // Mechanical delay (similar to rawbt's waitWhileDo logic, simplified)
+            try { Thread.sleep(60) } catch (e: InterruptedException) { }
         }
     }
 
+    /**
+     * Optimized Bitmap to ESC/POS conversion.
+     * Uses 1D arrays and lookup logic inspired by GraphLibrary for better performance.
+     */
     private fun convertBitmapToEscPos(bitmap: Bitmap): ByteArray {
         val width = bitmap.width
         val height = bitmap.height
@@ -490,68 +606,74 @@ class MyPrintService : PrintService() {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         
-        val grayPixels = Array(height) { IntArray(width) }
+        // 1D array for dithered pixels (0 or 255)
+        // This is faster than 2D array access
+        val monoPixels = IntArray(width * height)
 
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val color = pixels[y * width + x]
-                val r = (color shr 16) and 0xFF
-                val g = (color shr 8) and 0xFF
-                val b = color and 0xFF
-                
-                var lum = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                
-                if (lum > 215) {
-                    lum = 255 
-                } else if (lum < 130) {
-                    lum = 0   
-                }
-                
-                grayPixels[y][x] = lum
-            }
+        // 1. Grayscale & Floyd-Steinberg Dithering
+        // --- FASTEST APPROACH: Convert to Gray first, then Dither ---
+        val grayPlane = IntArray(width * height)
+        for (i in 0 until width * height) {
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            grayPlane[i] = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
         }
 
-        // Dithering loop...
+        // Dithering Loop
         for (y in 0 until height) {
             for (x in 0 until width) {
-                val oldPixel = grayPixels[y][x]
+                val i = y * width + x
+                val oldPixel = grayPlane[i]
                 val newPixel = if (oldPixel < 128) 0 else 255
-                grayPixels[y][x] = newPixel
-                val quantError = oldPixel - newPixel
-
-                if (x + 1 < width)
-                    grayPixels[y][x + 1] = clamp(grayPixels[y][x + 1] + (quantError * 7 / 16))
-                if (x - 1 >= 0 && y + 1 < height)
-                    grayPixels[y + 1][x - 1] = clamp(grayPixels[y + 1][x - 1] + (quantError * 3 / 16))
-                if (y + 1 < height)
-                    grayPixels[y + 1][x] = clamp(grayPixels[y + 1][x] + (quantError * 5 / 16))
-                if (x + 1 < width && y + 1 < height)
-                    grayPixels[y + 1][x + 1] = clamp(grayPixels[y + 1][x + 1] + (quantError * 1 / 16))
+                grayPlane[i] = newPixel // Store final binary value (0 = black, 255 = white)
+                
+                val error = oldPixel - newPixel
+                
+                // Distribute Error
+                if (x + 1 < width) 
+                    grayPlane[i + 1] = clamp(grayPlane[i + 1] + (error * 7 / 16))
+                
+                if (y + 1 < height) {
+                    if (x - 1 >= 0) 
+                        grayPlane[i + width - 1] = clamp(grayPlane[i + width - 1] + (error * 3 / 16))
+                    
+                    grayPlane[i + width] = clamp(grayPlane[i + width] + (error * 5 / 16))
+                    
+                    if (x + 1 < width) 
+                        grayPlane[i + width + 1] = clamp(grayPlane[i + width + 1] + (error * 1 / 16))
+                }
             }
         }
 
+        // 2. Bit Packing (Raster Format)
         val data = ByteArray(widthBytes * height)
-        var index = 0
+        var dataIndex = 0
         
         for (y in 0 until height) {
-            for (x in 0 until widthBytes) {
+            val rowStart = y * width
+            for (xByte in 0 until widthBytes) {
                 var byteValue = 0
-                for (b in 0 until 8) {
-                    val currentX = x * 8 + b
-                    if (currentX < width) {
-                        if (grayPixels[y][currentX] == 0) { 
-                            byteValue = byteValue or (1 shl (7 - b))
+                for (bit in 0 until 8) {
+                    val x = xByte * 8 + bit
+                    if (x < width) {
+                        // 0 is black (print), 255 is white (no print)
+                        // ESC/POS usually expects 1 = Print (Black), 0 = No Print (White)
+                        // So if grayPlane is 0 (black), we set the bit.
+                        if (grayPlane[rowStart + x] == 0) {
+                            byteValue = byteValue or (1 shl (7 - bit))
                         }
                     }
                 }
-                data[index++] = byteValue.toByte()
+                data[dataIndex++] = byteValue.toByte()
             }
         }
         return data
     }
 
     private fun clamp(value: Int): Int {
-        return max(0, min(255, value))
+        return if (value < 0) 0 else if (value > 255) 255 else value
     }
 
     override fun onRequestCancelPrintJob(printJob: PrintJob) {
@@ -564,6 +686,10 @@ class MyPrintService : PrintService() {
     
     override fun onDestroy() {
         super.onDestroy()
+        isReaderRunning = false
         executor.shutdown()
+        // Ensure notification is gone when service dies
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID)
     }
 }

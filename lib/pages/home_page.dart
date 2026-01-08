@@ -25,7 +25,7 @@ import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
 
-// Import the viewer page
+// Import the viewer page (This file already contains PrintUtils, so we don't redefine it here)
 import 'pdf_viewer_ios.dart'; 
 
 class HomePage extends StatefulWidget {
@@ -36,7 +36,7 @@ class HomePage extends StatefulWidget {
   _HomePageState createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final PrinterService _printerService = PrinterService();
 
   List<BluetoothInfo> _pairedDevices = [];
@@ -48,11 +48,26 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // Detect app resume
     _checkPermissions();
 
     // Handle file on initial launch (Auto-print logic)
     if (widget.sharedFilePath != null) {
       _handleSharedFile(widget.sharedFilePath!);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // --- REFRESH STATUS ON APP RESUME ---
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _verifyConnectionStatus();
     }
   }
 
@@ -111,22 +126,37 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ==========================================
-  // EXISTING METHODS
+  // UPDATED PERMISSIONS (Notification + Battery Popup)
   // ==========================================
 
   Future<void> _checkPermissions() async {
     if (Platform.isAndroid) {
+      // 1. Request Core Permissions + NOTIFICATION
       await [
         Permission.bluetooth,
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.location,
+        Permission.notification, // Critical for Android 13+
       ].request();
+
+      // 2. TRIGGER BATTERY OPTIMIZATION POP-UP
+      // This automatically opens the "Allow / Deny" dialog if not already granted.
+      // No button needed in UI; this runs on app startup.
+      var status = await Permission.ignoreBatteryOptimizations.status;
+      if (status.isDenied) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
     } else if (Platform.isIOS) {
       await [Permission.bluetooth].request();
     }
-    _loadBondedDevices();
+    await _loadBondedDevices();
+    _verifyConnectionStatus(); // Check actual connection state immediately
   }
+
+  // ==========================================
+  // EXISTING METHODS
+  // ==========================================
 
   Future<void> _loadBondedDevices({String? autoSelectMac}) async {
     setState(() => _isLoadingPaired = true);
@@ -138,7 +168,6 @@ class _HomePageState extends State<HomePage> {
       final String? lastUsedMac = prefs.getString('selected_printer_mac');
       final String? lastUsedName = prefs.getString('selected_printer_name');
 
-      // Logic to add the last used device to list if not found (iOS behavior)
       if (Platform.isIOS && lastUsedMac != null && lastUsedName != null) {
           BluetoothInfo savedDevice = BluetoothInfo(name: lastUsedName, macAdress: lastUsedMac);
           if (!devices.any((d) => d.macAdress == lastUsedMac)) {
@@ -186,6 +215,31 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Verifies if the printer is *actually* connected.
+  Future<void> _verifyConnectionStatus() async {
+    try {
+      // --- FIX APPLIED HERE ---
+      // Instead of calling PrintBluetoothThermal directly (which is Android/Classic only),
+      // we ask the PrinterService. It will check _bleService for iOS.
+      bool isConnected = await _printerService.isConnected();
+      
+      final prefs = await SharedPreferences.getInstance();
+      String? savedMac = prefs.getString('selected_printer_mac');
+
+      if (mounted) {
+        setState(() {
+          if (isConnected && savedMac != null) {
+            _connectedMac = savedMac;
+          } else {
+            _connectedMac = null; // Force UI to show "Disconnected"
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint("Error verifying connection: $e");
+    }
+  }
+
   Future<void> _handleFullRefresh() async {
     setState(() => _isLoadingPaired = true);
     final lang = Provider.of<LanguageService>(context, listen: false);
@@ -196,9 +250,9 @@ class _HomePageState extends State<HomePage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('selected_printer_mac'); 
       await prefs.remove('selected_printer_name'); 
-      await prefs.remove('printer_width_dots');    
+      await prefs.remove('printer_width_dots');     
       await prefs.remove('printer_dpi');            
-      await prefs.remove('printer_width_mode');    
+      await prefs.remove('printer_width_mode');     
       
       if (Platform.isIOS) {
         await prefs.remove('ios_saved_printers');
@@ -226,7 +280,8 @@ class _HomePageState extends State<HomePage> {
 
   // --- TOGGLE CONNECTION METHOD ---
   Future<void> _toggleConnection() async {
-    if (_selectedPairedDevice == null) return;
+    if (_selectedPairedDevice == null || _isConnecting) return; 
+
     final lang = Provider.of<LanguageService>(context, listen: false);
 
     setState(() => _isConnecting = true);
@@ -234,14 +289,11 @@ class _HomePageState extends State<HomePage> {
     String selectedMac = _selectedPairedDevice!.macAdress;
     String selectedName = _selectedPairedDevice!.name;
     
-    // Check if we are currently connected to the device selected in the dropdown
     bool isCurrentlyConnectedToSelection = (_connectedMac == selectedMac);
-    
     final prefs = await SharedPreferences.getInstance();
 
     try {
       if (isCurrentlyConnectedToSelection) {
-        // --- DISCONNECT ---
         await _printerService.disconnect();
         await prefs.remove('selected_printer_mac');
         await prefs.remove('selected_printer_name'); 
@@ -254,9 +306,6 @@ class _HomePageState extends State<HomePage> {
           _showSnackBar(lang.translate('msg_disconnected'));
         }
       } else {
-        // --- CONNECT ---
-
-        // 1. FORCE DISCONNECT FIRST
         await _printerService.disconnect();
         
         if (Platform.isAndroid) {
@@ -266,7 +315,6 @@ class _HomePageState extends State<HomePage> {
         bool success = false;
 
         if (Platform.isAndroid) {
-           // ANDROID RETRY MECHANISM
            try {
              success = await _printerService.connect(selectedMac);
            } catch (e) {
@@ -282,13 +330,15 @@ class _HomePageState extends State<HomePage> {
              }
            }
         } else {
-           // iOS LOGIC
            success = await _printerService.connect(selectedMac);
         }
 
         if (success) {
           await prefs.setString('selected_printer_mac', selectedMac);
           await prefs.setString('selected_printer_name', selectedName); 
+
+          // Auto-set width to 58mm (384 dots) on successful connection
+          await prefs.setInt('printer_width_dots', 384);
 
           if (mounted) {
             setState(() {
@@ -317,6 +367,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- SCAN PAGE NAVIGATION ---
   Future<void> _navigateToScanPage() async {
     final result = await Navigator.push(
       context,
@@ -342,6 +393,7 @@ class _HomePageState extends State<HomePage> {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString('selected_printer_name', name);
           await prefs.setString('selected_printer_mac', mac);
+          await prefs.setInt('printer_width_dots', 384);
 
           final lang = Provider.of<LanguageService>(context, listen: false);
 
@@ -354,6 +406,7 @@ class _HomePageState extends State<HomePage> {
       }
     } else {
       _loadBondedDevices();
+      _verifyConnectionStatus();
     }
   }
 
@@ -782,44 +835,5 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
-  }
-}
-
-// ==========================================
-// UTILITY FOR IMAGE TO ESC/POS CONVERSION
-// ==========================================
-class PrintUtils {
-  static List<int> imageToEscPos(img.Image image) {
-    List<int> bytes = [];
-    
-    // Command: GS v 0 (Raster Image)
-    // Header: 0x1D 0x76 0x30 0x00 xL xH yL yH
-    
-    int widthBytes = (image.width + 7) ~/ 8;
-    int height = image.height;
-    
-    bytes += [0x1D, 0x76, 0x30, 0x00];
-    bytes += [widthBytes % 256, widthBytes ~/ 256];
-    bytes += [height % 256, height ~/ 256];
-    
-    // Process pixels
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < widthBytes; x++) {
-        int byte = 0;
-        for (int b = 0; b < 8; b++) {
-          int px = x * 8 + b;
-          if (px < image.width) {
-            // Get pixel (assuming grayscale)
-            var pixel = image.getPixel(px, y);
-            // Check luminance/brightness. If dark, bit is 1. If light, bit is 0.
-            if (pixel.r < 128) { // Dark pixel
-               byte |= (1 << (7 - b));
-            }
-          }
-        }
-        bytes.add(byte);
-      }
-    }
-    return bytes;
   }
 }

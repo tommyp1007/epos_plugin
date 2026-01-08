@@ -52,7 +52,7 @@
     <string>This app needs Bluetooth access to scan for and connect to MyInvois e-Pos printers.</string>
 
     <key>LSSupportsOpeningDocumentsInPlace</key>
-    <false/>
+    <true/>
     <key>UIFileSharingEnabled</key>
     <true/>
 
@@ -73,6 +73,8 @@
         <dict>
             <key>CFBundleTypeName</key>
             <string>PDF Document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>
@@ -84,6 +86,8 @@
         <dict>
             <key>CFBundleTypeName</key>
             <string>Images</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
             <key>LSItemContentTypes</key>

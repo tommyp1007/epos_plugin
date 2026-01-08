@@ -13,7 +13,7 @@ class AppTranslations {
 
       // Section 1
       'sec_connection': '1. Connection Manager',
-      'select_hint': 'Please turn on Bluetooth',
+      'select_hint': 'Please click "Search to Devices" button',
       'unknown_device': 'Unknown Device',
       'working': 'Working...',
       'disconnect': 'Disconnect',
@@ -110,6 +110,7 @@ class AppTranslations {
       'app_plugin_name': 'MyInvois e-Pos Printer',
       'val_lhdnm_team': 'LHDNM Team',
       'lbl_build': 'Build',
+      'btn_fix_background': 'Fix Background Printing', // NEW KEY ADDED
 
       // PDF Test Print
       'test_print_title': 'MyInvois e-Pos Test Print',
@@ -125,7 +126,7 @@ class AppTranslations {
 
       // Section 1
       'sec_connection': '1. Pengurus Sambungan',
-      'select_hint': 'Sila aktifkan Bluetooth',
+      'select_hint': 'Sila tekan butang "Carian Peranti"',
       'unknown_device': 'Peranti Tidak Diketahui',
       'working': 'Sedang proses...',
       'disconnect': 'Putus Sambungan',
@@ -222,6 +223,7 @@ class AppTranslations {
       'app_plugin_name': 'Pencetak MyInvois e-Pos',
       'val_lhdnm_team': 'Pasukan LHDNM',
       'lbl_build': 'Binaan',
+      'btn_fix_background': 'Baiki Cetakan Latar Belakang', // NEW KEY ADDED
 
       // PDF Test Print
       'test_print_title': 'Cetakan Ujian MyInvois e-Pos',
@@ -242,6 +244,7 @@ class LanguageService with ChangeNotifier {
   Locale _currentLocale = const Locale('en');
 
   Locale get currentLocale => _currentLocale;
+  String get currentLanguage => _currentLocale.languageCode; // Added helper for UI
 
   LanguageService() {
     _loadLanguage();
@@ -256,15 +259,23 @@ class LanguageService with ChangeNotifier {
     }
   }
 
+  // UPDATED: Now accepts a specific code ('en' or 'ms') to support Radio buttons
+  void setLanguage(String code) async {
+    if (code == 'en' || code == 'ms') {
+      _currentLocale = Locale(code);
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('language_code', code);
+      notifyListeners();
+    }
+  }
+
+  // Kept for backward compatibility if needed
   void switchLanguage() async {
     if (_currentLocale.languageCode == 'en') {
-      _currentLocale = const Locale('ms');
+      setLanguage('ms');
     } else {
-      _currentLocale = const Locale('en');
+      setLanguage('en');
     }
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setString('language_code', _currentLocale.languageCode);
-    notifyListeners();
   }
 
   String translate(String key) {

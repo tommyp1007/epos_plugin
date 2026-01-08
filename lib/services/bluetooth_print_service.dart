@@ -10,31 +10,29 @@ class BluetoothPrintService {
 
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _writeCharacteristic;
+  BluetoothCharacteristic? _notifyCharacteristic; // For Input Draining
 
-  /// Check connection status using the device's current state stream
+  /// Check connection status
   bool get isConnected {
     if (_connectedDevice == null) return false;
     return _connectedDevice!.isConnected; 
   }
 
-  // --- 1. Request Permissions (Updated for Android 12+ & iOS) ---
+  // --- 1. Request Permissions ---
   Future<bool> requestPermissions() async {
     if (Platform.isAndroid) {
-      // Android 12+ (SDK 31+) permissions
       Map<Permission, PermissionStatus> statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-        Permission.location, // Critical for detection on older Android (Huawei/Samsung)
+        Permission.location,
       ].request();
 
       bool scanGranted = statuses[Permission.bluetoothScan]?.isGranted ?? false;
       bool connectGranted = statuses[Permission.bluetoothConnect]?.isGranted ?? false;
       bool locationGranted = statuses[Permission.location]?.isGranted ?? false;
 
-      // Simplistic check: generally if we have location (old) or scan+connect (new), we are good.
       return (scanGranted && connectGranted) || locationGranted;
     } else if (Platform.isIOS) {
-      // iOS 13+ requires Bluetooth permission
       PermissionStatus status = await Permission.bluetooth.request();
       return status.isGranted;
     }
@@ -45,11 +43,9 @@ class BluetoothPrintService {
   Stream<List<ScanResult>> get scanResults => FlutterBluePlus.scanResults;
 
   Future<void> startScan() async {
-    // Check if Bluetooth is actually On before scanning to avoid errors
     if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
       throw Exception("Bluetooth is off");
     }
-    // Timeout ensures we don't drain battery
     return FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
   }
 
@@ -60,44 +56,48 @@ class BluetoothPrintService {
   // --- 3. Connect to a specific printer ---
   Future<bool> connect(BluetoothDevice device) async {
     try {
-      // Crucial for Android: Always stop scanning before connecting
       await stopScan();
 
       if (_connectedDevice != null && _connectedDevice!.remoteId == device.remoteId) {
-        return true; // Already connected
+        return true; 
       }
 
-      // --- FIX APPLIED HERE ---
+      // Connect without autoConnect for faster response
       await device.connect(autoConnect: false, mtu: null);
-
-      
       _connectedDevice = device;
 
-      // 4. Discover Services & Find Write Characteristic
+      // 4. Discover Services
       List<BluetoothService> services = await device.discoverServices();
-      
-      // Reset characteristic
       _writeCharacteristic = null;
+      _notifyCharacteristic = null;
 
       for (var service in services) {
         for (var characteristic in service.characteristics) {
-          // We look for a characteristic that allows writing.
-          // Printers usually have one specific characteristic for data.
+          // Find Write
           if (characteristic.properties.writeWithoutResponse || characteristic.properties.write) {
             _writeCharacteristic = characteristic;
-            return true;
+          }
+          // Find Notify (for input draining)
+          if (characteristic.properties.notify || characteristic.properties.indicate) {
+             _notifyCharacteristic = characteristic;
           }
         }
       }
       
-      if (_writeCharacteristic == null) {
-        throw Exception("No writable characteristic found on this device.");
+      if (_writeCharacteristic != null) {
+          // Start draining input if available (keeps connection alive on some devices)
+          if (_notifyCharacteristic != null) {
+              try {
+                  await _notifyCharacteristic!.setNotifyValue(true);
+                  _notifyCharacteristic!.lastValueStream.listen((value) {});
+              } catch (e) { /* Ignore notification errors */ }
+          }
+          return true;
       }
       
-      return true;
+      throw Exception("No writable characteristic found.");
     } catch (e) {
       print("Connection failed: $e");
-      // Cleanup if connection failed
       disconnect();
       return false;
     }
@@ -109,37 +109,30 @@ class BluetoothPrintService {
       await _connectedDevice!.disconnect();
       _connectedDevice = null;
       _writeCharacteristic = null;
+      _notifyCharacteristic = null;
     }
   }
 
-  // --- 6. Send Bytes (With Chunking for BLE) ---
+  // --- 6. Send Bytes (Optimized for iOS BLE) ---
   Future<void> sendBytes(List<int> bytes) async {
     if (_connectedDevice == null || _writeCharacteristic == null) {
       throw Exception("Not connected or Write Characteristic not found");
     }
 
-    // Determine the type of write (With Response is slower but more reliable, Without Response is faster)
     final bool canWriteNoResponse = _writeCharacteristic!.properties.writeWithoutResponse;
-    final bool canWriteResponse = _writeCharacteristic!.properties.write;
     
-    // Preference: NoResponse > Response
-    bool useWithoutResponse = canWriteNoResponse;
-    if (!canWriteNoResponse && canWriteResponse) {
-      useWithoutResponse = false;
-    }
-
-    // BLE has a limit (MTU). We must split data into chunks.
-    const int chunkSize = 150; 
+    // REDUCED CHUNK SIZE: 80 bytes is safer for generic thermal printers via BLE on iOS
+    const int chunkSize = 80; 
 
     for (int i = 0; i < bytes.length; i += chunkSize) {
       int end = (i + chunkSize < bytes.length) ? i + chunkSize : bytes.length;
       List<int> chunk = bytes.sublist(i, end);
       
       try {
-        await _writeCharacteristic!.write(chunk, withoutResponse: useWithoutResponse);
+        await _writeCharacteristic!.write(chunk, withoutResponse: canWriteNoResponse);
         
-        // Small delay is CRITICAL for Android to prevent buffer overflow
-        int delay = Platform.isAndroid ? 15 : 5; 
+        // Increased delay for iOS stability (prevents data loss)
+        int delay = Platform.isAndroid ? 15 : 45; 
         await Future.delayed(Duration(milliseconds: delay)); 
       } catch (e) {
         print("Error writing chunk: $e");

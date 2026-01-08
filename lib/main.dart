@@ -7,6 +7,7 @@ import 'package:flutter_sharing_intent/model/sharing_file.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart'; 
 
 import 'services/language_service.dart';
 import 'pages/home_page.dart';
@@ -38,6 +39,26 @@ class _MyAppState extends State<MyApp> {
     super.initState();
     _initShareListener();
     _checkDeviceAndConfigureSettings();
+    _requestRuntimePermissions(); // Request permissions on startup
+  }
+
+  /// Request Notification and Bluetooth permissions at runtime.
+  Future<void> _requestRuntimePermissions() async {
+    if (Platform.isAndroid) {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.notification,      // Required for Android 13+ Notification
+        Permission.bluetoothConnect,  // Required for Android 12+ Printing
+        Permission.bluetoothScan,     // Required for Android 12+ Discovery
+      ].request();
+
+      if (statuses[Permission.notification]!.isDenied) {
+        debugPrint("Notification permission denied. Background status won't show.");
+      }
+    } else if (Platform.isIOS) {
+      // NEW: Request Bluetooth on iOS startup.
+      // This ensures the permission is ready when the "Share" action tries to print.
+      await Permission.bluetooth.request();
+    }
   }
 
   Future<void> _checkDeviceAndConfigureSettings() async {
@@ -122,6 +143,7 @@ class _MyAppState extends State<MyApp> {
             }
 
             // General Fix: Decode URI chars (e.g. %20 -> space)
+            // This is critical for iOS file paths with spaces
             try {
               path = Uri.decodeFull(path!);
             } catch (e) {
@@ -129,9 +151,11 @@ class _MyAppState extends State<MyApp> {
             }
         }
 
-        setState(() {
-          _sharedFilePath = path;
-        });
+        if (mounted) {
+          setState(() {
+            _sharedFilePath = path;
+          });
+        }
         debugPrint("Received content via Share ($source): $path");
       }
     }
@@ -155,7 +179,7 @@ class _MyAppState extends State<MyApp> {
         useMaterial3: false,
       ),
       home: HomePage(
-        // Forces reload if file path changes
+        // Forces reload if file path changes, ensuring _handleSharedFile runs in HomePage
         key: _sharedFilePath != null ? ValueKey(_sharedFilePath) : null,
         sharedFilePath: _sharedFilePath
       ),
