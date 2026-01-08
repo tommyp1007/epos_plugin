@@ -44,7 +44,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   List<Uint8List> _previewBytes = [];
   List<List<int>> _readyToPrintBytes = []; 
 
-  int _printerWidth = 576; // Default to 80mm (High Quality default)
+  // Defaults to 576 (80mm) per 'MyInvois e-Pos Printer' specs, but adjusts based on prefs
+  int _printerWidth = 576; 
   String _errorMessage = '';
 
   @override
@@ -56,8 +57,20 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<void> _loadSettingsAndProcessFile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // If not set, default to 576 (80mm) for "High Quality" setting
-      _printerWidth = prefs.getInt('flutter.printer_width_dots') ?? 576;
+      
+      // 1. Detect Width Logic (Matching Kotlin Preference Retrieval)
+      // If user manually set a width, use it. Otherwise default to 576 (80mm) for "EPOS_SETTING"
+      int savedWidth = prefs.getInt('flutter.printer_width_dots') ?? -1;
+      
+      if (savedWidth > 0) {
+        _printerWidth = savedWidth;
+      } else {
+        // Default logic: Assume "MyInvois e-Pos Printer" (mediaEpos) is 80mm
+        // You can add logic here to check 'flutter.selected_printer_mac' if you want 
+        // to detect specific 58mm devices, but 576 is the safe high-quality default.
+        _printerWidth = 576; 
+      }
+
       await _processFile();
     } catch (e) {
       if (mounted) {
@@ -95,9 +108,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       if (isPdf) {
         final pdfBytes = await fileToProcess.readAsBytes();
         
-        // --- HIGH QUALITY RENDERING ---
-        // Render at 300 DPI (approx 1.5x - 2x standard) to capture fine text details
-        // This simulates the "EPOS_SETTING" high resolution capability.
+        // --- HIGH QUALITY CAPTURE (EPOS_SETTING Logic) ---
+        // Kotlin uses: max(targetWidthPx * 2, 600)
+        // In Flutter/Printing, 300 DPI roughly equates to >1200px width for standard paper,
+        // which satisfies the "Double Width" requirement for crisp downscaling.
         await for (var page in Printing.raster(pdfBytes, dpi: 300)) {
           final pngBytes = await page.toPng();
           final decoded = img.decodeImage(pngBytes);
@@ -115,23 +129,25 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       _readyToPrintBytes.clear();
 
       for (var image in rawImages) {
-        // 1. Smart Trim (High Sensitivity)
+        // 1. SMART AUTO-CROP (Using Updated 240 Threshold)
         img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
         if (trimmed == null) continue;
 
-        // 2. High Quality Resize
-        // Use Cubic Interpolation to prevent text from looking "jagged" or pixelated when downscaling
+        // 2. SCALE TO PRINTER WIDTH
+        // We use Cubic Interpolation to match Kotlin's 'filter=true' in createScaledBitmap
+        // This prevents text from becoming blocky when resizing from 300DPI down to 576px.
         img.Image resized = img.copyResize(
           trimmed, 
           width: _printerWidth, 
           interpolation: img.Interpolation.cubic
         );
 
-        // 3. Convert to ESC/POS (with Dithering & High Contrast)
+        // 3. CONVERT TO ESC/POS (With High Contrast + Dithering)
         List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
         
         _readyToPrintBytes.add(escPosData);
-        // Save preview (grayscale representation)
+        
+        // Generate a preview image (Grayscale)
         _previewBytes.add(img.encodePng(img.grayscale(resized)));
       }
 
@@ -160,7 +176,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<bool> _ensureConnected() async {
     if (await widget.printerService.isConnected()) return true;
     final prefs = await SharedPreferences.getInstance();
-    final savedMac = prefs.getString('flutter.selected_printer_mac'); // Updated key to match Kotlin
+    final savedMac = prefs.getString('flutter.selected_printer_mac'); 
     if (savedMac != null && savedMac.isNotEmpty) {
        try { return await widget.printerService.connect(savedMac); } catch (e) { return false; }
     }
@@ -268,7 +284,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                           color: Colors.white,
                           boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black.withOpacity(0.2))]
                         ),
-                        // Display the high-quality resized image
+                        // Display the processed, resized image (High Quality Preview)
                         child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
                       )).toList(),
                     ),
@@ -306,7 +322,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 class PrintUtils {
   static int clamp(int value) => value.clamp(0, 255);
 
-  /// Matches Kotlin 'trimWhiteSpace' logic with High Sensitivity
+  /// Matches Kotlin 'trimWhiteSpace' logic with High Sensitivity (240)
+  /// This ensures faint borders or light gray frames are detected and kept.
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
     int height = source.height;
@@ -342,6 +359,7 @@ class PrintUtils {
 
     if (!foundContent) return null;
 
+    // Apply Padding (Matching Kotlin Logic)
     const int padding = 5;
     minX = math.max(0, minX - padding);
     maxX = math.min(width, maxX + padding);
@@ -353,6 +371,7 @@ class PrintUtils {
   }
 
   /// Optimized Bitmap to ESC/POS conversion (Raster Bit Image)
+  /// Replicates the ColorMatrix high-contrast filter + Floyd-Steinberg dithering
   static List<int> convertBitmapToEscPos(img.Image srcImage) {
     int width = srcImage.width;
     int height = srcImage.height;
@@ -362,6 +381,7 @@ class PrintUtils {
     List<int> grayPlane = List.filled(width * height, 0);
 
     // 1. Convert to Gray & Apply High Contrast (Matching Kotlin ColorMatrix)
+    // The Kotlin Matrix was: Scale 1.2, Offset -20
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = srcImage.getPixel(x, y);
@@ -386,6 +406,7 @@ class PrintUtils {
         grayPlane[i] = newPixel;
         int error = oldPixel - newPixel;
 
+        // Distribute error to neighbors
         if (x + 1 < width) {
           int idx = i + 1;
           grayPlane[idx] = clamp(grayPlane[idx] + (error * 7 ~/ 16));
@@ -418,7 +439,6 @@ class PrintUtils {
           int x = xByte * 8 + bit;
           if (x < width) {
             // 0 is black (print), 255 is white (no print)
-            // ESC/POS expects 1=Print(Black), 0=NoPrint
             if (grayPlane[y * width + x] == 0) {
               byteValue |= (1 << (7 - bit));
             }
