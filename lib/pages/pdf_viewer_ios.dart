@@ -38,13 +38,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   bool _isLoading = true;
   bool _isPrinting = false;
   
-  // SAFETY LIMIT: Prevent more than 5 jobs in memory to avoid Out-Of-Memory crashes
+  // SAFETY LIMIT: Prevent more than 5 jobs in memory
   static const int _maxQueueSize = 5;
 
   List<Uint8List> _previewBytes = [];
   List<List<int>> _readyToPrintBytes = []; 
 
-  int _printerWidth = 384;
+  int _printerWidth = 576; // Default to 80mm (High Quality default)
   String _errorMessage = '';
 
   @override
@@ -56,7 +56,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<void> _loadSettingsAndProcessFile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      _printerWidth = prefs.getInt('printer_width_dots') ?? 384;
+      // If not set, default to 576 (80mm) for "High Quality" setting
+      _printerWidth = prefs.getInt('flutter.printer_width_dots') ?? 576;
       await _processFile();
     } catch (e) {
       if (mounted) {
@@ -93,7 +94,11 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       if (isPdf) {
         final pdfBytes = await fileToProcess.readAsBytes();
-        await for (var page in Printing.raster(pdfBytes, dpi: 203)) {
+        
+        // --- HIGH QUALITY RENDERING ---
+        // Render at 300 DPI (approx 1.5x - 2x standard) to capture fine text details
+        // This simulates the "EPOS_SETTING" high resolution capability.
+        await for (var page in Printing.raster(pdfBytes, dpi: 300)) {
           final pngBytes = await page.toPng();
           final decoded = img.decodeImage(pngBytes);
           if (decoded != null) rawImages.add(decoded);
@@ -110,13 +115,23 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       _readyToPrintBytes.clear();
 
       for (var image in rawImages) {
+        // 1. Smart Trim (High Sensitivity)
         img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
         if (trimmed == null) continue;
 
-        img.Image resized = img.copyResize(trimmed, width: _printerWidth);
+        // 2. High Quality Resize
+        // Use Cubic Interpolation to prevent text from looking "jagged" or pixelated when downscaling
+        img.Image resized = img.copyResize(
+          trimmed, 
+          width: _printerWidth, 
+          interpolation: img.Interpolation.cubic
+        );
+
+        // 3. Convert to ESC/POS (with Dithering & High Contrast)
         List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
         
         _readyToPrintBytes.add(escPosData);
+        // Save preview (grayscale representation)
         _previewBytes.add(img.encodePng(img.grayscale(resized)));
       }
 
@@ -145,7 +160,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<bool> _ensureConnected() async {
     if (await widget.printerService.isConnected()) return true;
     final prefs = await SharedPreferences.getInstance();
-    final savedMac = prefs.getString('selected_printer_mac');
+    final savedMac = prefs.getString('flutter.selected_printer_mac'); // Updated key to match Kotlin
     if (savedMac != null && savedMac.isNotEmpty) {
        try { return await widget.printerService.connect(savedMac); } catch (e) { return false; }
     }
@@ -155,7 +170,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   Future<void> _doPrint() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
-    // 1. SAFETY CHECK: Check the pending queue in PrinterService
     if (widget.printerService.pendingJobs >= _maxQueueSize) {
       _showSnackBar("Print queue is full. Please wait.", isError: true);
       return;
@@ -173,16 +187,19 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         return;
       }
 
-      // Construct job bytes
+      // Construct ESC/POS Commands
       List<int> bytesToPrint = [];
-      bytesToPrint += [27, 97, 1]; // Center
+      bytesToPrint += [0x1B, 0x40]; // Init
+      bytesToPrint += [27, 97, 1]; // Center align
+      
       for (var processedBytes in _readyToPrintBytes) {
         bytesToPrint += processedBytes;
-        bytesToPrint += [10];
+        bytesToPrint += [10]; // Small gap between pages
       }
-      bytesToPrint += [10, 10, 10, 29, 86, 66, 0]; // Feed & Cut
+      
+      bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
+      bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
-      // 2. Add to managed worker queue
       await widget.printerService.sendBytes(bytesToPrint);
 
       if (mounted) {
@@ -191,7 +208,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     } catch (e) {
       if (mounted) _showSnackBar("Error: $e", isError: true);
     } finally {
-      // Cooldown for the button to prevent double-tap spamming
       await Future.delayed(const Duration(milliseconds: 300));
       if (mounted) setState(() => _isPrinting = false);
     }
@@ -215,13 +231,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Receipt Preview"),
+        title: const Text("MyInvois Receipt Preview"),
         actions: [
           if (pendingCount > 0)
-             Center(child: Padding(
-               padding: const EdgeInsets.only(right: 15),
-               child: Text("Queue: $pendingCount", style: const TextStyle(fontWeight: FontWeight.bold)),
-             ))
+            Center(child: Padding(
+              padding: const EdgeInsets.only(right: 15),
+              child: Text("Queue: $pendingCount", style: const TextStyle(fontWeight: FontWeight.bold)),
+            ))
         ],
       ),
       backgroundColor: Colors.grey[200],
@@ -252,7 +268,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                           color: Colors.white,
                           boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black.withOpacity(0.2))]
                         ),
-                        child: Image.memory(bytes, fit: BoxFit.contain),
+                        // Display the high-quality resized image
+                        child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
                       )).toList(),
                     ),
                   ),
@@ -289,23 +306,31 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 class PrintUtils {
   static int clamp(int value) => value.clamp(0, 255);
 
+  /// Matches Kotlin 'trimWhiteSpace' logic with High Sensitivity
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
     int height = source.height;
     int minX = width, maxX = 0, minY = height, maxY = 0;
     bool foundContent = false;
-    const int darknessThreshold = 200;
-    const int minDarkPixelsPerRow = 5;
+    
+    // Matched Kotlin: Threshold 240 detects even very light gray lines
+    const int darknessThreshold = 240; 
+    const int minDarkPixelsPerRow = 2; // Matched Kotlin
 
     for (int y = 0; y < height; y++) {
       int darkPixelsInRow = 0;
       for (int x = 0; x < width; x++) {
-        if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) darkPixelsInRow++;
+        // Get Luminance directly
+        if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
+          darkPixelsInRow++;
+        }
       }
-      if (darkPixelsInRow > minDarkPixelsPerRow) {
+      
+      if (darkPixelsInRow >= minDarkPixelsPerRow) {
         foundContent = true;
         if (y < minY) minY = y;
         if (y > maxY) maxY = y;
+        
         for (int x = 0; x < width; x++) {
           if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
              if (x < minX) minX = x;
@@ -314,55 +339,92 @@ class PrintUtils {
         }
       }
     }
+
     if (!foundContent) return null;
+
     const int padding = 5;
     minX = math.max(0, minX - padding);
     maxX = math.min(width, maxX + padding);
     minY = math.max(0, minY - padding);
-    maxY = math.min(height, maxY + padding + 40);
+    // Extra bottom padding for cutter (matched Kotlin +40)
+    maxY = math.min(height, maxY + padding + 40); 
 
     return img.copyCrop(source, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
   }
 
+  /// Optimized Bitmap to ESC/POS conversion (Raster Bit Image)
   static List<int> convertBitmapToEscPos(img.Image srcImage) {
     int width = srcImage.width;
     int height = srcImage.height;
     int widthBytes = (width + 7) ~/ 8;
-    List<List<int>> grayPixels = List.generate(height, (_) => List.filled(width, 0));
+    
+    // Using 1D array logic for performance (similar to Kotlin)
+    List<int> grayPlane = List.filled(width * height, 0);
 
+    // 1. Convert to Gray & Apply High Contrast (Matching Kotlin ColorMatrix)
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = srcImage.getPixel(x, y);
+        
+        // High Contrast Formula (Scale 1.2, Offset -20)
         int r = clamp((p.r * 1.2 - 20).toInt());
         int g = clamp((p.g * 1.2 - 20).toInt());
         int b = clamp((p.b * 1.2 - 20).toInt());
-        int lum = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
-        grayPixels[y][x] = lum > 215 ? 255 : (lum < 130 ? 0 : lum);
+        
+        // Standard Grayscale Weights
+        grayPlane[y * width + x] = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
       }
     }
 
+    // 2. Floyd-Steinberg Dithering
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
-        int oldP = grayPixels[y][x];
-        int newP = oldP < 128 ? 0 : 255;
-        grayPixels[y][x] = newP;
-        int err = oldP - newP;
-        if (x + 1 < width) grayPixels[y][x + 1] = clamp(grayPixels[y][x + 1] + (err * 7 ~/ 16));
-        if (x - 1 >= 0 && y + 1 < height) grayPixels[y + 1][x - 1] = clamp(grayPixels[y + 1][x - 1] + (err * 3 ~/ 16));
-        if (y + 1 < height) grayPixels[y + 1][x] = clamp(grayPixels[y + 1][x] + (err * 5 ~/ 16));
-        if (x + 1 < width && y + 1 < height) grayPixels[y + 1][x + 1] = clamp(grayPixels[y + 1][x + 1] + (err * 1 ~/ 16));
+        int i = y * width + x;
+        int oldPixel = grayPlane[i];
+        int newPixel = oldPixel < 128 ? 0 : 255;
+        
+        grayPlane[i] = newPixel;
+        int error = oldPixel - newPixel;
+
+        if (x + 1 < width) {
+          int idx = i + 1;
+          grayPlane[idx] = clamp(grayPlane[idx] + (error * 7 ~/ 16));
+        }
+        
+        if (y + 1 < height) {
+          if (x - 1 >= 0) {
+            int idx = i + width - 1;
+            grayPlane[idx] = clamp(grayPlane[idx] + (error * 3 ~/ 16));
+          }
+          int idx = i + width;
+          grayPlane[idx] = clamp(grayPlane[idx] + (error * 5 ~/ 16));
+          
+          if (x + 1 < width) {
+             int idx = i + width + 1;
+             grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
+          }
+        }
       }
     }
 
+    // 3. Bit Packing (GS v 0)
+    // We send the header inside here to keep the chunk self-contained if needed
     List<int> cmd = [0x1D, 0x76, 0x30, 0x00, widthBytes % 256, widthBytes ~/ 256, height % 256, height ~/ 256];
+    
     for (int y = 0; y < height; y++) {
-      for (int x = 0; x < widthBytes; x++) {
-        int byte = 0;
-        for (int b = 0; b < 8; b++) {
-          int curX = x * 8 + b;
-          if (curX < width && grayPixels[y][curX] == 0) byte |= (1 << (7 - b));
+      for (int xByte = 0; xByte < widthBytes; xByte++) {
+        int byteValue = 0;
+        for (int bit = 0; bit < 8; bit++) {
+          int x = xByte * 8 + bit;
+          if (x < width) {
+            // 0 is black (print), 255 is white (no print)
+            // ESC/POS expects 1=Print(Black), 0=NoPrint
+            if (grayPlane[y * width + x] == 0) {
+              byteValue |= (1 << (7 - bit));
+            }
+          }
         }
-        cmd.add(byte);
+        cmd.add(byteValue);
       }
     }
     return cmd;
