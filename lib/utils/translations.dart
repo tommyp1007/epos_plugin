@@ -9,6 +9,7 @@ class AppTranslations {
   static final Map<String, Map<String, String>> _localizedValues = {
     'en': {
       'app_title': 'MyInvois e-Pos Printer',
+      'title_login': 'MyInvois e-Pos Login',
       'lang_button': 'BM',
 
       // Section 1
@@ -99,6 +100,14 @@ class AppTranslations {
       'msg_detect_huawei': 'Detected Huawei Device. Defaulting to 58mm.',
       'msg_unknown_internal': 'Unknown Internal Device. Defaulting to 58mm.',
       'msg_detect_error': 'Detection Error. Defaulting to 58mm.',
+      
+      // Cache & Reload
+      'msg_cache_cleared': 'Cache Cleared. Reloading...',
+      'msg_reloading': 'Page is Reloading...',
+
+      // Native Service Messages (For reference/future use)
+      'msg_login_required': 'MyInvois e-Pos: Login Required',
+      'msg_login_desc': 'Please login to the MyInvois e-Pos app to enable printing.',
 
       // Settings page
       'title_settings': 'Settings & Info',
@@ -110,7 +119,8 @@ class AppTranslations {
       'app_plugin_name': 'MyInvois e-Pos Printer',
       'val_lhdnm_team': 'LHDNM Team',
       'lbl_build': 'Build',
-      'btn_fix_background': 'Fix Background Printing', // NEW KEY ADDED
+      'btn_fix_background': 'Fix Background Printing',
+      'btn_logout': 'Logout',
 
       // PDF Test Print
       'test_print_title': 'MyInvois e-Pos Test Print',
@@ -122,6 +132,7 @@ class AppTranslations {
     },
     'ms': {
       'app_title': 'Pencetak MyInvois e-Pos',
+      'title_login': 'Log Masuk MyInvois e-Pos',
       'lang_button': 'ENG',
 
       // Section 1
@@ -213,6 +224,14 @@ class AppTranslations {
       'msg_unknown_internal': 'Peranti Dalaman Tidak Diketahui. Tetapan asal 58mm.',
       'msg_detect_error': 'Ralat Pengesanan. Tetapan asal 58mm.',
 
+      // Cache & Reload
+      'msg_cache_cleared': 'Cache Dibersihkan. Memuat semula...',
+      'msg_reloading': 'Halaman sedang dimuat semula...',
+
+      // Native Service Messages (For reference/future use)
+      'msg_login_required': 'MyInvois e-Pos: Log Masuk Diperlukan',
+      'msg_login_desc': 'Sila log masuk ke aplikasi MyInvois e-Pos untuk mengaktifkan cetakan.',
+
       // Settings page
       'title_settings': 'Tetapan & Info',
       'sec_language': 'Bahasa',
@@ -223,7 +242,8 @@ class AppTranslations {
       'app_plugin_name': 'Pencetak MyInvois e-Pos',
       'val_lhdnm_team': 'Pasukan LHDNM',
       'lbl_build': 'Binaan',
-      'btn_fix_background': 'Baiki Cetakan Latar Belakang', // NEW KEY ADDED
+      'btn_fix_background': 'Baiki Cetakan Latar Belakang',
+      'btn_logout': 'Log Keluar',
 
       // PDF Test Print
       'test_print_title': 'Cetakan Ujian MyInvois e-Pos',
@@ -244,7 +264,7 @@ class LanguageService with ChangeNotifier {
   Locale _currentLocale = const Locale('en');
 
   Locale get currentLocale => _currentLocale;
-  String get currentLanguage => _currentLocale.languageCode; // Added helper for UI
+  String get currentLanguage => _currentLocale.languageCode; 
 
   LanguageService() {
     _loadLanguage();
@@ -259,7 +279,6 @@ class LanguageService with ChangeNotifier {
     }
   }
 
-  // UPDATED: Now accepts a specific code ('en' or 'ms') to support Radio buttons
   void setLanguage(String code) async {
     if (code == 'en' || code == 'ms') {
       _currentLocale = Locale(code);
@@ -269,7 +288,6 @@ class LanguageService with ChangeNotifier {
     }
   }
 
-  // Kept for backward compatibility if needed
   void switchLanguage() async {
     if (_currentLocale.languageCode == 'en') {
       setLanguage('ms');

@@ -51,15 +51,11 @@ class MyPrintService : PrintService() {
         private const val CHANNEL_ID = "epos_print_channel"
         private const val NOTIFICATION_ID = 8888
         
-        // =================================================================
         // WIDTH CONFIGURATION
-        // =================================================================
         private const val WIDTH_58MM = 384
         private const val WIDTH_80MM = 576
         
-        // =================================================================
         // ESC/POS COMMANDS
-        // =================================================================
         private val INIT_PRINTER = byteArrayOf(0x1B, 0x40)
         private val FEED_PAPER = byteArrayOf(0x1B, 0x64, 0x04) 
         private val CUT_PAPER = byteArrayOf(0x1D, 0x56, 0x42, 0x00)
@@ -117,11 +113,52 @@ class MyPrintService : PrintService() {
     override fun onCreatePrinterDiscoverySession(): PrinterDiscoverySession {
         return object : PrinterDiscoverySession() {
             override fun onStartPrinterDiscovery(priorityList: List<PrinterId>) {
+                // =========================================================================
+                // 1. SECURITY CHECK: IS USER LOGGED IN?
+                // =========================================================================
+                val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                // "flutter." prefix is automatically added by the Flutter SharedPreferences plugin
+                val isLoggedIn = prefs.getBoolean("flutter.is_logged_in", false)
+                val langCode = prefs.getString("flutter.language_code", "en") ?: "en"
+
+                // Define dummy capabilities for the Auth message
+                val mediaAuth = MediaSize("AUTH_MSG", "Login Required", 2000, 2000)
+                val resAuth = Resolution("R1", "200dpi", 200, 200)
+
+                if (!isLoggedIn) {
+                    // --- ACCESS DENIED: User is not logged in ---
+                    // We add a dummy "Unavailable" printer to Grey Out the service.
+                    val authId = generatePrinterId("auth_required")
+                    
+                    val capsBuilder = PrinterCapabilitiesInfo.Builder(authId)
+                    capsBuilder.addMediaSize(mediaAuth, true)
+                    capsBuilder.addResolution(resAuth, true)
+                    capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)
+
+                    val loginRequiredTitle = if (langCode == "ms") "MyInvois e-Pos: Log Masuk Diperlukan" else "MyInvois e-Pos: Login Required"
+                    val loginRequiredDesc = if (langCode == "ms") "Sila log masuk ke aplikasi MyInvois e-Pos untuk mengaktifkan cetakan." else "Please login to the MyInvois e-Pos app to enable printing."
+
+                    val authPrinter = PrinterInfo.Builder(
+                        authId, 
+                        loginRequiredTitle, // Name visible to user
+                        PrinterInfo.STATUS_UNAVAILABLE // This Greys it out / marks unavailable
+                    )
+                    .setDescription(loginRequiredDesc)
+                    .setCapabilities(capsBuilder.build())
+                    .build()
+
+                    // Add only this printer and STOP processing.
+                    addPrinters(listOf(authPrinter))
+                    return
+                }
+
+                // =========================================================================
+                // 2. USER IS LOGGED IN: PROCEED WITH ACTUAL DISCOVERY
+                // =========================================================================
                 val printers = ArrayList<PrinterInfo>()
                 val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
 
                 // --- 1. GET PREFERENCES ---
-                val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 val activeMac = prefs.getString("flutter.selected_printer_mac", "") ?: ""
 
                 // 2. HARDWARE DETECTION
@@ -189,6 +226,8 @@ class MyPrintService : PrintService() {
                     printers.add(PrinterInfo.Builder(dummyId, "No Printer Found", PrinterInfo.STATUS_IDLE)
                         .setCapabilities(capsBuilder.build()).build())
                 }
+                
+                // Add the actual printers (this replaces the auth printer if it was there)
                 addPrinters(printers)
             }
             override fun onStopPrinterDiscovery() {}
@@ -242,7 +281,7 @@ class MyPrintService : PrintService() {
                 
                 // --- WIDTH DETECTION ---
                 var printerName = "Unknown"
-                if (macAddress != "sunmi_virtual") {
+                if (macAddress != "sunmi_virtual" && macAddress != "auth_required") {
                     val adapter = BluetoothAdapter.getDefaultAdapter()
                     val device = adapter.getRemoteDevice(macAddress)
                     printerName = (device.name ?: "Unknown").uppercase()
@@ -293,22 +332,21 @@ class MyPrintService : PrintService() {
                 tempFile = File(cacheDir, "web_print_${System.currentTimeMillis()}.pdf")
                 seekablePfd = transferToTempFile(rawFileDescriptor, tempFile)
 
-                if (macAddress == "sunmi_virtual") {
+                // Silent success for dummy printers
+                if (macAddress == "sunmi_virtual" || macAddress == "auth_required") {
                       Thread.sleep(1000)
-                      success = true
+                      success = true 
                 } else {
                     val adapter = BluetoothAdapter.getDefaultAdapter()
                     val device: BluetoothDevice = adapter.getRemoteDevice(macAddress)
                     
-                    // --- ROBUST CONNECT LOGIC (From Bt.java) ---
+                    // --- ROBUST CONNECT LOGIC ---
                     try {
-                        // Try Secure first
                         socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
                         socket.connect()
                     } catch (e: Exception) {
                         Log.w(TAG, "Secure connect failed, trying Insecure...")
                         try {
-                            // Try Insecure Fallback
                             socket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
                             socket.connect()
                         } catch (e2: Exception) {
@@ -321,8 +359,7 @@ class MyPrintService : PrintService() {
                         val outputStream = socket!!.outputStream
                         val inputStream = socket!!.inputStream
 
-                        // --- INPUT DRAINER (Critical Idea from rawbt) ---
-                        // Prevents buffer overflow if printer sends data back
+                        // --- INPUT DRAINER ---
                         startInputDrainer(inputStream)
 
                         // Wake up sequence
@@ -341,12 +378,9 @@ class MyPrintService : PrintService() {
                             Log.d(TAG, "Skipping Print - Page was Blank")
                         }
 
-                        // Delay to allow buffer to flush before closing
                         try { Thread.sleep(1500) } catch (e: InterruptedException) { }
                         
-                        // Stop reader
                         isReaderRunning = false
-                        
                         outputStream.flush()
                         socket!!.close()
                         success = true
@@ -368,7 +402,6 @@ class MyPrintService : PrintService() {
                     try { wakeLock!!.release() } catch (e: Exception) { }
                 }
                 
-                // --- DECREMENT QUEUE & UPDATE NOTIFICATION ---
                 activeJobCount.decrementAndGet()
                 updateServiceNotification()
 
@@ -383,10 +416,6 @@ class MyPrintService : PrintService() {
         }
     }
 
-    /**
-     * Drains the input stream in a background thread.
-     * Based on rawbt's ReaderReceiver logic.
-     */
     private fun startInputDrainer(inputStream: InputStream) {
         isReaderRunning = true
         Thread {
@@ -395,13 +424,10 @@ class MyPrintService : PrintService() {
                 try {
                     if (inputStream.available() > 0) {
                         inputStream.read(buffer)
-                        // In a full implementation, we could parse status here.
-                        // For now, we just drain it to keep the connection healthy.
                     } else {
                         Thread.sleep(50)
                     }
                 } catch (e: IOException) {
-                    // Connection likely closed
                     isReaderRunning = false
                 } catch (e: InterruptedException) {
                     isReaderRunning = false
@@ -435,7 +461,6 @@ class MyPrintService : PrintService() {
 
             val page = renderer.openPage(i)
             
-            // 1. High-Res Capture
             val captureWidth = max(targetWidthPx * 2, 600) 
             val scale = captureWidth.toFloat() / page.width.toFloat()
             val captureHeight = (page.height * scale).toInt()
@@ -461,7 +486,6 @@ class MyPrintService : PrintService() {
             page.render(tempBitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
             page.close()
 
-            // 2. SMART AUTO-CROP
             val trimmedBitmap = trimWhiteSpace(tempBitmap)
             
             if (trimmedBitmap == null) {
@@ -469,7 +493,6 @@ class MyPrintService : PrintService() {
                 continue
             }
 
-            // 3. Scale to Printer Width
             val finalHeight = (trimmedBitmap.height * (targetWidthPx.toFloat() / trimmedBitmap.width)).toInt()
             val finalBitmap = Bitmap.createScaledBitmap(trimmedBitmap, targetWidthPx, max(1, finalHeight), true)
             
@@ -477,7 +500,6 @@ class MyPrintService : PrintService() {
                 trimmedBitmap.recycle()
             }
 
-            // 4. Send
             if (finalBitmap.height > 0) {
                 try {
                     val ditheredBytes = convertBitmapToEscPos(finalBitmap)
@@ -498,11 +520,6 @@ class MyPrintService : PrintService() {
         return anyPagePrinted
     }
 
-    /**
-     * UPDATED TRIMMER:
-     * High sensitivity (240 threshold) ensures faint borders/frames are preserved.
-     * Low pixel count (2) ensures thin lines are preserved.
-     */
     private fun trimWhiteSpace(source: Bitmap): Bitmap? {
         val width = source.width
         val height = source.height
@@ -515,17 +532,14 @@ class MyPrintService : PrintService() {
         var maxY = 0
         var foundContent = false
 
-        // Threshold 240: Anything darker than "almost pure white" is considered content.
-        // This ensures light gray frames or borders are NOT cropped.
         val darknessThreshold = 240
-        val minDarkPixelsPerRow = 2 // Detect even thin lines
+        val minDarkPixelsPerRow = 2 
 
         for (y in 0 until height) {
             var darkPixelsInRow = 0
             for (x in 0 until width) {
                 val pixel = pixels[y * width + x]
                 val r = (pixel shr 16) and 0xFF
-                // Check if pixel is NOT white
                 if (r < darknessThreshold) {
                     darkPixelsInRow++
                 }
@@ -553,7 +567,6 @@ class MyPrintService : PrintService() {
         minX = max(0, minX - padding)
         maxX = min(width, maxX + padding)
         minY = max(0, minY - padding)
-        // Add bottom padding for cutter
         maxY = min(height, maxY + padding + 40) 
 
         val trimWidth = maxX - minX
@@ -566,7 +579,6 @@ class MyPrintService : PrintService() {
 
     private fun writeWithSplitting(outputStream: OutputStream, data: ByteArray, width: Int, height: Int) {
         val widthBytes = (width + 7) / 8
-        // Safe chunk size (30 lines ~ 2KB)
         val linesPerChunk = 30 
         
         var currentY = 0
@@ -576,7 +588,6 @@ class MyPrintService : PrintService() {
             val linesToSend = min(linesPerChunk, height - currentY)
             val chunkDataSize = linesToSend * widthBytes
             
-            // GS v 0 m xL xH yL yH
             val header = byteArrayOf(
                 0x1D, 0x76, 0x30, 0x00,
                 (widthBytes % 256).toByte(), (widthBytes / 256).toByte(),
@@ -590,15 +601,10 @@ class MyPrintService : PrintService() {
             offset += chunkDataSize
             currentY += linesToSend
             
-            // Mechanical delay (similar to rawbt's waitWhileDo logic, simplified)
             try { Thread.sleep(60) } catch (e: InterruptedException) { }
         }
     }
 
-    /**
-     * Optimized Bitmap to ESC/POS conversion.
-     * Uses 1D arrays and lookup logic inspired by GraphLibrary for better performance.
-     */
     private fun convertBitmapToEscPos(bitmap: Bitmap): ByteArray {
         val width = bitmap.width
         val height = bitmap.height
@@ -606,12 +612,9 @@ class MyPrintService : PrintService() {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         
-        // 1D array for dithered pixels (0 or 255)
-        // This is faster than 2D array access
-        val monoPixels = IntArray(width * height)
-
-        // 1. Grayscale & Floyd-Steinberg Dithering
-        // --- FASTEST APPROACH: Convert to Gray first, then Dither ---
+        val data = ByteArray(widthBytes * height)
+        var dataIndex = 0
+        
         val grayPlane = IntArray(width * height)
         for (i in 0 until width * height) {
             val c = pixels[i]
@@ -621,49 +624,30 @@ class MyPrintService : PrintService() {
             grayPlane[i] = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
         }
 
-        // Dithering Loop
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val i = y * width + x
                 val oldPixel = grayPlane[i]
                 val newPixel = if (oldPixel < 128) 0 else 255
-                grayPlane[i] = newPixel // Store final binary value (0 = black, 255 = white)
-                
+                grayPlane[i] = newPixel 
                 val error = oldPixel - newPixel
-                
-                // Distribute Error
-                if (x + 1 < width) 
-                    grayPlane[i + 1] = clamp(grayPlane[i + 1] + (error * 7 / 16))
-                
+                if (x + 1 < width) grayPlane[i + 1] = clamp(grayPlane[i + 1] + (error * 7 / 16))
                 if (y + 1 < height) {
-                    if (x - 1 >= 0) 
-                        grayPlane[i + width - 1] = clamp(grayPlane[i + width - 1] + (error * 3 / 16))
-                    
+                    if (x - 1 >= 0) grayPlane[i + width - 1] = clamp(grayPlane[i + width - 1] + (error * 3 / 16))
                     grayPlane[i + width] = clamp(grayPlane[i + width] + (error * 5 / 16))
-                    
-                    if (x + 1 < width) 
-                        grayPlane[i + width + 1] = clamp(grayPlane[i + width + 1] + (error * 1 / 16))
+                    if (x + 1 < width) grayPlane[i + width + 1] = clamp(grayPlane[i + width + 1] + (error * 1 / 16))
                 }
             }
         }
 
-        // 2. Bit Packing (Raster Format)
-        val data = ByteArray(widthBytes * height)
-        var dataIndex = 0
-        
         for (y in 0 until height) {
             val rowStart = y * width
             for (xByte in 0 until widthBytes) {
                 var byteValue = 0
                 for (bit in 0 until 8) {
                     val x = xByte * 8 + bit
-                    if (x < width) {
-                        // 0 is black (print), 255 is white (no print)
-                        // ESC/POS usually expects 1 = Print (Black), 0 = No Print (White)
-                        // So if grayPlane is 0 (black), we set the bit.
-                        if (grayPlane[rowStart + x] == 0) {
-                            byteValue = byteValue or (1 shl (7 - bit))
-                        }
+                    if (x < width && grayPlane[rowStart + x] == 0) {
+                        byteValue = byteValue or (1 shl (7 - bit))
                     }
                 }
                 data[dataIndex++] = byteValue.toByte()
@@ -672,23 +656,16 @@ class MyPrintService : PrintService() {
         return data
     }
 
-    private fun clamp(value: Int): Int {
-        return if (value < 0) 0 else if (value > 255) 255 else value
-    }
+    private fun clamp(value: Int): Int = if (value < 0) 0 else if (value > 255) 255 else value
 
     override fun onRequestCancelPrintJob(printJob: PrintJob) {
-        try {
-            printJob.cancel()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel print job", e)
-        }
+        try { printJob.cancel() } catch (e: Exception) { Log.e(TAG, "Cancel failed", e) }
     }
     
     override fun onDestroy() {
         super.onDestroy()
         isReaderRunning = false
         executor.shutdown()
-        // Ensure notification is gone when service dies
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)
     }

@@ -25,7 +25,7 @@ import 'width_settings.dart';
 import 'scan_devices.dart';
 import 'app_info.dart';
 
-// Import the viewer page (This file already contains PrintUtils, so we don't redefine it here)
+// Import the viewer page
 import 'pdf_viewer_ios.dart'; 
 
 class HomePage extends StatefulWidget {
@@ -141,8 +141,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ].request();
 
       // 2. TRIGGER BATTERY OPTIMIZATION POP-UP
-      // This automatically opens the "Allow / Deny" dialog if not already granted.
-      // No button needed in UI; this runs on app startup.
       var status = await Permission.ignoreBatteryOptimizations.status;
       if (status.isDenied) {
         await Permission.ignoreBatteryOptimizations.request();
@@ -151,7 +149,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       await [Permission.bluetooth].request();
     }
     await _loadBondedDevices();
-    _verifyConnectionStatus(); // Check actual connection state immediately
+    _verifyConnectionStatus(); 
   }
 
   // ==========================================
@@ -218,9 +216,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Verifies if the printer is *actually* connected.
   Future<void> _verifyConnectionStatus() async {
     try {
-      // --- FIX APPLIED HERE ---
-      // Instead of calling PrintBluetoothThermal directly (which is Android/Classic only),
-      // we ask the PrinterService. It will check _bleService for iOS.
       bool isConnected = await _printerService.isConnected();
       
       final prefs = await SharedPreferences.getInstance();
@@ -466,7 +461,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         bytes += [10]; 
 
         bytes += [27, 97, 1]; 
-        String qrData = 'e-Pos System Test';
+        String qrData = 'MyInvois e-Pos Print Test';
         List<int> qrDataBytes = utf8.encode(qrData);
         int storeLen = qrDataBytes.length + 3;
         int storePL = storeLen % 256;
@@ -537,7 +532,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     pw.SizedBox(height: 10),
                     pw.BarcodeWidget(
                       barcode: pw.Barcode.qrCode(),
-                      data: 'e-Pos System Test',
+                      data: 'MyInvois e-Pos Print Test',
                       width: 100,
                       height: 100,
                     ),
