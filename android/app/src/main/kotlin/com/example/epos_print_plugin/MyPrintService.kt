@@ -71,9 +71,11 @@ class MyPrintService : PrintService() {
     @Volatile
     private var isReaderRunning = false
 
-    // --- HELPER TO GET LANGUAGE ---
+    // --- HELPER TO GET LANGUAGE FROM FLUTTER SHARED PREFS ---
     private fun getCurrentLanguage(): String {
+        // "FlutterSharedPreferences" is the default XML file name used by the Flutter plugin
         val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        // Flutter prefixes keys with "flutter.", so we read "flutter.language_code"
         return prefs.getString("flutter.language_code", "en") ?: "en"
     }
 
@@ -136,7 +138,9 @@ class MyPrintService : PrintService() {
                 // =========================================================================
                 val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                 val isLoggedIn = prefs.getBoolean("flutter.is_logged_in", false)
-                val langCode = prefs.getString("flutter.language_code", "en") ?: "en"
+                
+                // Get Fresh Language
+                val langCode = getCurrentLanguage()
 
                 // Localized Strings for Auth
                 val authLabel = if (langCode == "ms") "Log Masuk Diperlukan" else "Login Required"

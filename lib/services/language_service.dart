@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-// Helper for translations import
 import '../utils/translations.dart'; 
 
 class LanguageService with ChangeNotifier {
@@ -17,21 +15,22 @@ class LanguageService with ChangeNotifier {
   // Load saved language from phone storage
   Future<void> _loadLanguage() async {
     final prefs = await SharedPreferences.getInstance();
+    // note: SharedPreferences in Flutter adds a "flutter." prefix to keys in the XML file
+    // So 'language_code' here becomes 'flutter.language_code' in Android native.
     _currentLanguage = prefs.getString('language_code') ?? 'en';
     notifyListeners();
   }
 
-  // Method renamed to 'setLanguage' to match your AppInfoPage usage
+  // Set the language and save it so Native Android can read it
   Future<void> setLanguage(String languageCode) async {
     _currentLanguage = languageCode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language_code', _currentLanguage);
-    notifyListeners(); // This tells the UI to rebuild
+    notifyListeners(); 
   }
 
-  // Helper to get text easily
+  // Helper to get text easily within Flutter UI
   String translate(String key) {
-    // Uses the AppTranslations class from your utils
     return AppTranslations.text(key, _currentLanguage); 
   }
 }
