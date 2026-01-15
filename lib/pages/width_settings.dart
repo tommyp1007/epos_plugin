@@ -66,6 +66,7 @@ class _WidthSettingsState extends State<WidthSettings> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _selectedDpi = prefs.getInt('printer_dpi') ?? 203;
+      // KEY: printer_width_dots
       _widthController.text = (prefs.getInt('printer_width_dots') ?? 384).toString();
     });
   }
@@ -78,6 +79,7 @@ class _WidthSettingsState extends State<WidthSettings> {
     await prefs.setInt('printer_dpi', _selectedDpi);
     
     // Save Width (Dots)
+    // KEY: printer_width_dots
     int? dots = int.tryParse(_widthController.text);
     if (dots != null) {
       await prefs.setInt('printer_width_dots', dots);
@@ -253,7 +255,7 @@ class _WidthSettingsState extends State<WidthSettings> {
                     color: _canAutoDetect ? Colors.green[700] : Colors.orange[800], 
                     fontStyle: FontStyle.italic,
                     fontSize: 12
-                  )
+                  ),
                 ),
               ),
 

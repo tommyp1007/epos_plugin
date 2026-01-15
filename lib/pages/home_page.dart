@@ -810,16 +810,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ),
               
-              // --- SECTION 4: PDF Viewer (iOS ONLY) ---
+              // --- SECTION 4: PDF Viewer / Manual Print (UPDATED WITH TRANSLATION) ---
               if (Platform.isIOS) ...[
                 const SizedBox(height: 20),
-                const Text("Section 4: PDF Viewer / Manual Print", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text(lang.translate('sec_manual_print'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 Card(
                   elevation: 2,
                   child: ListTile(
                     leading: const Icon(Icons.picture_as_pdf, size: 40, color: Colors.red),
-                    title: const Text("Select Document"),
-                    subtitle: const Text("Pick a PDF or Image to print"),
+                    title: Text(lang.translate('btn_select_doc')),
+                    subtitle: Text(lang.translate('desc_select_doc')),
                     trailing: const Icon(Icons.arrow_forward_ios),
                     onTap: _pickAndPrintFile,
                   ),

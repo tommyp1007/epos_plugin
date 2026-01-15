@@ -33,6 +33,26 @@ class AppTranslations {
       'width_dpi': 'Width Settings',
       'width_desc': 'Set 58mm or 80mm paper size',
 
+      // Section 4 (Manual Print)
+      'sec_manual_print': '4. Manual Print / PDF Viewer',
+      'btn_select_doc': 'Select Document',
+      'desc_select_doc': 'Pick a PDF or Image to print',
+
+      // Section 5 (PDF Preview & Queue)
+      'preview_title': 'MyInvois Receipt Preview',
+      'lbl_queue': 'Queue',
+      'status_queue_full': 'QUEUE FULL - PLEASE WAIT',
+      'status_printing': 'PRINTING IN PROGRESS',
+      'status_left': 'LEFT', // e.g., "(3 LEFT)"
+      'btn_wait': 'PLEASE WAIT...',
+      'btn_queueing': 'QUEUEING...',
+      'btn_print_receipt': 'PRINT RECEIPT',
+      'msg_queue_full_wait': 'Print queue is full. Please wait.',
+      'msg_added_queue': 'Added to queue',
+      'err_file_not_found': 'File not found at path:',
+      'err_decode': 'Could not decode content.',
+      'err_download': 'Download Failed:',
+
       // Snackbars / Status
       'msg_disconnected': 'Disconnected.',
       'msg_connected': 'Connected to',
@@ -40,6 +60,7 @@ class AppTranslations {
       'msg_error_conn': 'Error during connection:',
       'msg_error_launch': 'Error launching Native Print:',
       'msg_reset_defaults': 'Reset to Default Settings',
+      'msg_error_prefix': 'Error:',
 
       // Bluetooth Scan Page
       'title_scan': 'Scan for Printers',
@@ -156,6 +177,26 @@ class AppTranslations {
       'width_dpi': 'Tetapan Lebar',
       'width_desc': 'Tetapkan saiz kertas 58mm atau 80mm',
 
+      // Section 4 (Manual Print)
+      'sec_manual_print': '4. Cetakan Manual / Paparan PDF',
+      'btn_select_doc': 'Pilih Dokumen',
+      'desc_select_doc': 'Pilih PDF atau Imej untuk dicetak',
+
+      // Section 5 (PDF Preview & Queue)
+      'preview_title': 'Pratonton Resit MyInvois',
+      'lbl_queue': 'Giliran',
+      'status_queue_full': 'GILIRAN PENUH - TUNGGU SEBENTAR',
+      'status_printing': 'SEDANG MENCETAK',
+      'status_left': 'BAKI', // e.g., "(3 BAKI)"
+      'btn_wait': 'SILA TUNGGU...',
+      'btn_queueing': 'MENYUSUN...',
+      'btn_print_receipt': 'CETAK RESIT',
+      'msg_queue_full_wait': 'Giliran cetak penuh. Sila tunggu.',
+      'msg_added_queue': 'Ditambah ke giliran',
+      'err_file_not_found': 'Fail tidak dijumpai di laluan:',
+      'err_decode': 'Tidak dapat menyahkod kandungan.',
+      'err_download': 'Muat Turun Gagal:',
+
       // Snackbars / Status
       'msg_disconnected': 'Terputus.',
       'msg_connected': 'Berjaya sambung ke',
@@ -163,6 +204,7 @@ class AppTranslations {
       'msg_error_conn': 'Ralat semasa menyambung:',
       'msg_error_launch': 'Ralat melancarkan Cetakan Asli:',
       'msg_reset_defaults': 'Tetapan Semula ke Asal',
+      'msg_error_prefix': 'Ralat:',
 
       // Bluetooth Scan Page
       'title_scan': 'Cari Pencetak',
@@ -223,7 +265,7 @@ class AppTranslations {
       'msg_detect_huawei': 'Dikesan Peranti Huawei. Tetapan asal 58mm.',
       'msg_unknown_internal': 'Peranti Dalaman Tidak Diketahui. Tetapan asal 58mm.',
       'msg_detect_error': 'Ralat Pengesanan. Tetapan asal 58mm.',
-
+      
       // Cache & Reload
       'msg_cache_cleared': 'Cache Dibersihkan. Memuat semula...',
       'msg_reloading': 'Halaman sedang dimuat semula...',

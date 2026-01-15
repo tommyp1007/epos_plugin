@@ -12,6 +12,8 @@ import 'package:path_provider/path_provider.dart';
 // Image & PDF Processing
 import 'package:image/image.dart' as img;
 import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
@@ -35,18 +37,21 @@ class PdfViewerPage extends StatefulWidget {
 }
 
 class _PdfViewerPageState extends State<PdfViewerPage> {
-  bool _isLoading = true;
-  bool _isPrinting = false;
+  // State for UI Preview
+  Uint8List? _docBytes;
+  bool _isLoadingDoc = true;
+  String _errorMessage = '';
+
+  // State for Thermal Printing
+  bool _isProcessingPrintData = true; // Processing ESC/POS in background
+  bool _isPrinting = false; // Sending data to printer
+  List<List<int>> _readyToPrintBytes = []; 
   
   // SAFETY LIMIT: Prevent more than 5 jobs in memory
   static const int _maxQueueSize = 5;
 
-  List<Uint8List> _previewBytes = [];
-  List<List<int>> _readyToPrintBytes = []; 
-
-  // Defaults to 576 (80mm) per 'MyInvois e-Pos Printer' specs, but adjusts based on prefs
+  // Defaults to 576 (80mm) per 'MyInvois e-Pos Printer' specs
   int _printerWidth = 576; 
-  String _errorMessage = '';
 
   @override
   void initState() {
@@ -58,35 +63,34 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       
-      // 1. Detect Width Logic (Matching Kotlin Preference Retrieval)
-      // If user manually set a width, use it. Otherwise default to 576 (80mm) for "EPOS_SETTING"
-      int savedWidth = prefs.getInt('flutter.printer_width_dots') ?? -1;
+      // FIX: Use 'printer_width_dots', NOT 'flutter.printer_width_dots'
+      // SharedPreferences abstract the prefix on the Dart side.
+      int savedWidth = prefs.getInt('printer_width_dots') ?? -1;
       
       if (savedWidth > 0) {
         _printerWidth = savedWidth;
       } else {
-        // Default logic: Assume "MyInvois e-Pos Printer" (mediaEpos) is 80mm
-        // You can add logic here to check 'flutter.selected_printer_mac' if you want 
-        // to detect specific 58mm devices, but 576 is the safe high-quality default.
         _printerWidth = 576; 
       }
 
-      await _processFile();
+      await _prepareDocument();
     } catch (e) {
       if (mounted) {
         setState(() {
           _errorMessage = e.toString();
-          _isLoading = false;
+          _isLoadingDoc = false;
         });
       }
     }
   }
 
-  Future<void> _processFile() async {
+  Future<void> _prepareDocument() async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
     String cleanPath = widget.filePath;
     File fileToProcess;
 
     try {
+      // 1. Download or Resolve File
       if (cleanPath.toLowerCase().startsWith('http')) {
         fileToProcess = await _downloadFile(cleanPath);
       } else {
@@ -94,73 +98,100 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           cleanPath = cleanPath.substring(7);
         }
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
-
         fileToProcess = File(cleanPath);
+        
         if (!await fileToProcess.exists()) {
-          throw Exception("File not found at path: $cleanPath");
+          throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
         }
       }
 
       final String ext = fileToProcess.path.split('.').last.toLowerCase();
-      List<img.Image> rawImages = [];
-      bool isPdf = ext == 'pdf' || fileToProcess.path.endsWith('pdf');
-
-      if (isPdf) {
-        final pdfBytes = await fileToProcess.readAsBytes();
-        
-        // --- HIGH QUALITY CAPTURE (EPOS_SETTING Logic) ---
-        // Kotlin uses: max(targetWidthPx * 2, 600)
-        // In Flutter/Printing, 300 DPI roughly equates to >1200px width for standard paper,
-        // which satisfies the "Double Width" requirement for crisp downscaling.
-        await for (var page in Printing.raster(pdfBytes, dpi: 300)) {
-          final pngBytes = await page.toPng();
-          final decoded = img.decodeImage(pngBytes);
-          if (decoded != null) rawImages.add(decoded);
-        }
+      Uint8List rawBytes = await fileToProcess.readAsBytes();
+      
+      // 2. Prepare Bytes for PDF Previewer
+      if (ext == 'pdf' || fileToProcess.path.endsWith('pdf')) {
+         _docBytes = rawBytes;
       } else {
-        final bytes = await fileToProcess.readAsBytes();
-        final decoded = img.decodeImage(bytes);
-        if (decoded != null) rawImages.add(decoded);
+         // If image, wrap in PDF so the Viewer can handle zoom/scroll
+         final image = pw.MemoryImage(rawBytes);
+         final pdf = pw.Document();
+         pdf.addPage(pw.Page(
+           build: (pw.Context context) {
+             return pw.Center(child: pw.Image(image));
+           }
+         ));
+         _docBytes = await pdf.save();
       }
 
-      if (rawImages.isEmpty) throw Exception("Could not decode content.");
+      // 3. Show Preview Immediately (Fixes Lag)
+      if (mounted) {
+        setState(() => _isLoadingDoc = false);
+      }
 
-      _previewBytes.clear();
+      // 4. Start Heavy Processing for Thermal Printer (Background)
+      _generateThermalPrintData(rawBytes, ext == 'pdf');
+
+    } catch (e) {
+       if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoadingDoc = false; });
+    }
+  }
+
+  // --- Background Processing for Printer Commands ---
+  Future<void> _generateThermalPrintData(Uint8List sourceBytes, bool isPdf) async {
+    try {
+      List<img.Image> rawImages = [];
+
+      if (isPdf) {
+         // Rasterize at high DPI for Thermal Printer Clarity
+         await for (var page in Printing.raster(sourceBytes, dpi: 300)) {
+           final pngBytes = await page.toPng();
+           final decoded = img.decodeImage(pngBytes);
+           if (decoded != null) rawImages.add(decoded);
+         }
+      } else {
+         final decoded = img.decodeImage(sourceBytes);
+         if (decoded != null) rawImages.add(decoded);
+      }
+
+      if (rawImages.isEmpty) throw Exception("Empty Document");
+
       _readyToPrintBytes.clear();
 
+      // Convert each page to ESC/POS
       for (var image in rawImages) {
-        // 1. SMART AUTO-CROP (Using Updated 240 Threshold)
+        // A. Smart Crop
         img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
         if (trimmed == null) continue;
 
-        // 2. SCALE TO PRINTER WIDTH
-        // We use Cubic Interpolation to match Kotlin's 'filter=true' in createScaledBitmap
-        // This prevents text from becoming blocky when resizing from 300DPI down to 576px.
+        // B. Resize to Printer Width (Cubic for quality)
+        // THIS IS WHERE YOUR SETTING IS APPLIED
         img.Image resized = img.copyResize(
           trimmed, 
           width: _printerWidth, 
           interpolation: img.Interpolation.cubic
         );
 
-        // 3. CONVERT TO ESC/POS (With High Contrast + Dithering)
+        // C. Dither & Convert
         List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
-        
         _readyToPrintBytes.add(escPosData);
-        
-        // Generate a preview image (Grayscale)
-        _previewBytes.add(img.encodePng(img.grayscale(resized)));
       }
 
+      // 5. Enable Print Button
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isProcessingPrintData = false;
+        });
         if (widget.autoPrint) _doPrint();
       }
+
     } catch (e) {
-       if(mounted) setState(() { _errorMessage = "Error: $e"; _isLoading = false; });
+      debugPrint("Error generating print data: $e");
+      if(mounted) setState(() => _isProcessingPrintData = false);
     }
   }
 
   Future<File> _downloadFile(String url) async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
     final http.Response response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       final Directory tempDir = await getTemporaryDirectory();
@@ -169,7 +200,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       await file.writeAsBytes(response.bodyBytes);
       return file;
     } else {
-      throw Exception("Download Failed: ${response.statusCode}");
+      throw Exception("${lang.translate('err_download')} ${response.statusCode}");
     }
   }
 
@@ -187,8 +218,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
     if (widget.printerService.pendingJobs >= _maxQueueSize) {
-      _showSnackBar("Print queue is full. Please wait.", isError: true);
+      _showSnackBar(lang.translate('msg_queue_full_wait'), isError: true);
       return;
+    }
+
+    if (_readyToPrintBytes.isEmpty) {
+       _showSnackBar("Preparing print data... please wait.", isError: false);
+       return;
     }
 
     setState(() => _isPrinting = true);
@@ -219,10 +255,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       await widget.printerService.sendBytes(bytesToPrint);
 
       if (mounted) {
-        _showSnackBar("Added to queue (${widget.printerService.pendingJobs} pending)");
+        _showSnackBar("${lang.translate('msg_added_queue')} (${widget.printerService.pendingJobs} pending)");
       }
     } catch (e) {
-      if (mounted) _showSnackBar("Error: $e", isError: true);
+      if (mounted) _showSnackBar("${lang.translate('msg_error_prefix')} $e", isError: true);
     } finally {
       await Future.delayed(const Duration(milliseconds: 300));
       if (mounted) setState(() => _isPrinting = false);
@@ -242,57 +278,71 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
   @override
   Widget build(BuildContext context) {
+    final lang = Provider.of<LanguageService>(context);
+
     int pendingCount = widget.printerService.pendingJobs;
     bool isQueueFull = pendingCount >= _maxQueueSize;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("MyInvois Receipt Preview"),
+        title: Text(lang.translate('preview_title')),
         actions: [
           if (pendingCount > 0)
             Center(child: Padding(
               padding: const EdgeInsets.only(right: 15),
-              child: Text("Queue: $pendingCount", style: const TextStyle(fontWeight: FontWeight.bold)),
+              child: Text(
+                "${lang.translate('lbl_queue')}: $pendingCount", 
+                style: const TextStyle(fontWeight: FontWeight.bold)
+              ),
             ))
         ],
       ),
       backgroundColor: Colors.grey[200],
-      body: _isLoading
-        ? const Center(child: CircularProgressIndicator())
-        : Column(
-            children: [
-              if (pendingCount > 0)
-                Container(
-                  width: double.infinity,
-                  color: Colors.orange,
-                  padding: const EdgeInsets.all(8),
-                  child: Text(
-                    isQueueFull ? "QUEUE FULL - PLEASE WAIT" : "PRINTING IN PROGRESS ($pendingCount LEFT)", 
-                    textAlign: TextAlign.center, 
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
-                  ),
-                ),
+      body: Stack(
+        children: [
+          // 1. THE PDF VIEWER (Background Layer)
+          if (_isLoadingDoc)
+            const Center(child: CircularProgressIndicator())
+          else if (_docBytes != null)
+             PdfPreview(
+               build: (format) => _docBytes!,
+               useActions: false, 
+               canChangeOrientation: false,
+               canChangePageFormat: false,
+               canDebug: false,
+               scrollViewDecoration: BoxDecoration(color: Colors.grey[200]),
+               maxPageWidth: 700, 
+             )
+          else
+            Center(child: Text(_errorMessage, style: const TextStyle(color: Colors.red))),
 
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  child: Center(
-                    child: Column(
-                      children: _previewBytes.map((bytes) => Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black.withOpacity(0.2))]
-                        ),
-                        // Display the processed, resized image (High Quality Preview)
-                        child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
-                      )).toList(),
-                    ),
-                  ),
+          // 2. STATUS BAR (Top Overlay)
+          if (pendingCount > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                width: double.infinity,
+                color: Colors.orange.withOpacity(0.9),
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  isQueueFull 
+                      ? lang.translate('status_queue_full')
+                      : "${lang.translate('status_printing')} ($pendingCount ${lang.translate('status_left')})", 
+                  textAlign: TextAlign.center, 
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
                 ),
               ),
+            ),
 
-              Container(
+          // 3. PRINT BUTTON (Bottom Overlay)
+          if (!_isLoadingDoc)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
                 padding: const EdgeInsets.all(16),
                 color: Colors.white,
                 child: SafeArea(
@@ -301,20 +351,27 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton.icon(
-                      icon: _isPrinting
+                      icon: (_isPrinting || _isProcessingPrintData)
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Icon(Icons.print),
-                      label: Text(isQueueFull ? "PLEASE WAIT..." : (_isPrinting ? "QUEUEING..." : "PRINT RECEIPT")),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isQueueFull ? Colors.grey : Colors.blueAccent
+                      label: Text(
+                          isQueueFull 
+                            ? lang.translate('btn_wait') 
+                            : (_isProcessingPrintData 
+                                ? "ANALYZING..." 
+                                : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
                       ),
-                      onPressed: (_isPrinting || isQueueFull) ? null : _doPrint,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: (isQueueFull || _isProcessingPrintData) ? Colors.grey : Colors.blueAccent
+                      ),
+                      onPressed: (_isPrinting || isQueueFull || _isProcessingPrintData) ? null : _doPrint,
                     ),
                   ),
                 ),
-              )
-            ],
-          ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -322,22 +379,18 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 class PrintUtils {
   static int clamp(int value) => value.clamp(0, 255);
 
-  /// Matches Kotlin 'trimWhiteSpace' logic with High Sensitivity (240)
-  /// This ensures faint borders or light gray frames are detected and kept.
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
     int height = source.height;
     int minX = width, maxX = 0, minY = height, maxY = 0;
     bool foundContent = false;
     
-    // Matched Kotlin: Threshold 240 detects even very light gray lines
     const int darknessThreshold = 240; 
-    const int minDarkPixelsPerRow = 2; // Matched Kotlin
+    const int minDarkPixelsPerRow = 2; 
 
     for (int y = 0; y < height; y++) {
       int darkPixelsInRow = 0;
       for (int x = 0; x < width; x++) {
-        // Get Luminance directly
         if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
           darkPixelsInRow++;
         }
@@ -350,8 +403,8 @@ class PrintUtils {
         
         for (int x = 0; x < width; x++) {
           if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
-             if (x < minX) minX = x;
-             if (x > maxX) maxX = x;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
           }
         }
       }
@@ -359,44 +412,34 @@ class PrintUtils {
 
     if (!foundContent) return null;
 
-    // Apply Padding (Matching Kotlin Logic)
     const int padding = 5;
     minX = math.max(0, minX - padding);
     maxX = math.min(width, maxX + padding);
     minY = math.max(0, minY - padding);
-    // Extra bottom padding for cutter (matched Kotlin +40)
     maxY = math.min(height, maxY + padding + 40); 
 
     return img.copyCrop(source, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
   }
 
-  /// Optimized Bitmap to ESC/POS conversion (Raster Bit Image)
-  /// Replicates the ColorMatrix high-contrast filter + Floyd-Steinberg dithering
   static List<int> convertBitmapToEscPos(img.Image srcImage) {
     int width = srcImage.width;
     int height = srcImage.height;
     int widthBytes = (width + 7) ~/ 8;
     
-    // Using 1D array logic for performance (similar to Kotlin)
     List<int> grayPlane = List.filled(width * height, 0);
 
-    // 1. Convert to Gray & Apply High Contrast (Matching Kotlin ColorMatrix)
-    // The Kotlin Matrix was: Scale 1.2, Offset -20
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = srcImage.getPixel(x, y);
         
-        // High Contrast Formula (Scale 1.2, Offset -20)
         int r = clamp((p.r * 1.2 - 20).toInt());
         int g = clamp((p.g * 1.2 - 20).toInt());
         int b = clamp((p.b * 1.2 - 20).toInt());
         
-        // Standard Grayscale Weights
         grayPlane[y * width + x] = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
       }
     }
 
-    // 2. Floyd-Steinberg Dithering
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         int i = y * width + x;
@@ -406,7 +449,6 @@ class PrintUtils {
         grayPlane[i] = newPixel;
         int error = oldPixel - newPixel;
 
-        // Distribute error to neighbors
         if (x + 1 < width) {
           int idx = i + 1;
           grayPlane[idx] = clamp(grayPlane[idx] + (error * 7 ~/ 16));
@@ -421,15 +463,13 @@ class PrintUtils {
           grayPlane[idx] = clamp(grayPlane[idx] + (error * 5 ~/ 16));
           
           if (x + 1 < width) {
-             int idx = i + width + 1;
-             grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
+              int idx = i + width + 1;
+              grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
           }
         }
       }
     }
 
-    // 3. Bit Packing (GS v 0)
-    // We send the header inside here to keep the chunk self-contained if needed
     List<int> cmd = [0x1D, 0x76, 0x30, 0x00, widthBytes % 256, widthBytes ~/ 256, height % 256, height ~/ 256];
     
     for (int y = 0; y < height; y++) {
@@ -438,7 +478,6 @@ class PrintUtils {
         for (int bit = 0; bit < 8; bit++) {
           int x = xByte * 8 + bit;
           if (x < width) {
-            // 0 is black (print), 255 is white (no print)
             if (grayPlane[y * width + x] == 0) {
               byteValue |= (1 << (7 - bit));
             }

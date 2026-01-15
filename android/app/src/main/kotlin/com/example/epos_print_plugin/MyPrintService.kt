@@ -71,18 +71,29 @@ class MyPrintService : PrintService() {
     @Volatile
     private var isReaderRunning = false
 
+    // --- HELPER TO GET LANGUAGE ---
+    private fun getCurrentLanguage(): String {
+        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        return prefs.getString("flutter.language_code", "en") ?: "en"
+    }
+
     // --- NOTIFICATION MANAGER SETUP ---
     private fun updateServiceNotification() {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val langCode = getCurrentLanguage()
+
+        // Localized Strings for Notification Channel
+        val channelName = if (langCode == "ms") "Status Perkhidmatan Pencetak" else "Printer Service Status"
+        val channelDesc = if (langCode == "ms") "Menunjukkan status giliran pencetak aktif" else "Shows active printer queue status"
 
         // 1. Create Channel (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Printer Service Status",
+                channelName,
                 NotificationManager.IMPORTANCE_LOW // Low importance = No sound, just visual
             )
-            channel.description = "Shows active printer queue status"
+            channel.description = channelDesc
             notificationManager.createNotificationChannel(channel)
         }
 
@@ -90,11 +101,18 @@ class MyPrintService : PrintService() {
         val currentCount = activeJobCount.get()
         
         if (currentCount > 0) {
+            // Localized Strings for Notification Content
+            val notifTitle = if (langCode == "ms") "Pencetak e-Pos Sedang Berjalan" else "e-Pos Printer Running"
+            val notifText = if (langCode == "ms") 
+                "Mencetak di latar belakang... ($currentCount dalam giliran)" 
+            else 
+                "Printing in background... ($currentCount in queue)"
+
             // SHOW NOTIFICATION
             val builder = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download) // Or your app icon
-                .setContentTitle("e-Pos Printer Running")
-                .setContentText("Printing in background... ($currentCount in queue)")
+                .setContentTitle(notifTitle)
+                .setContentText(notifText)
                 .setOngoing(false) // FALSE means user CAN swipe it away if they want
                 .setProgress(0, 0, true) // Indeterminate progress bar
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -117,12 +135,16 @@ class MyPrintService : PrintService() {
                 // 1. SECURITY CHECK: IS USER LOGGED IN?
                 // =========================================================================
                 val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                // "flutter." prefix is automatically added by the Flutter SharedPreferences plugin
                 val isLoggedIn = prefs.getBoolean("flutter.is_logged_in", false)
                 val langCode = prefs.getString("flutter.language_code", "en") ?: "en"
 
+                // Localized Strings for Auth
+                val authLabel = if (langCode == "ms") "Log Masuk Diperlukan" else "Login Required"
+                val loginRequiredTitle = if (langCode == "ms") "MyInvois e-Pos: Log Masuk Diperlukan" else "MyInvois e-Pos: Login Required"
+                val loginRequiredDesc = if (langCode == "ms") "Sila log masuk ke aplikasi MyInvois e-Pos untuk mengaktifkan cetakan." else "Please login to the MyInvois e-Pos app to enable printing."
+
                 // Define dummy capabilities for the Auth message
-                val mediaAuth = MediaSize("AUTH_MSG", "Login Required", 2000, 2000)
+                val mediaAuth = MediaSize("AUTH_MSG", authLabel, 2000, 2000)
                 val resAuth = Resolution("R1", "200dpi", 200, 200)
 
                 if (!isLoggedIn) {
@@ -134,9 +156,6 @@ class MyPrintService : PrintService() {
                     capsBuilder.addMediaSize(mediaAuth, true)
                     capsBuilder.addResolution(resAuth, true)
                     capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)
-
-                    val loginRequiredTitle = if (langCode == "ms") "MyInvois e-Pos: Log Masuk Diperlukan" else "MyInvois e-Pos: Login Required"
-                    val loginRequiredDesc = if (langCode == "ms") "Sila log masuk ke aplikasi MyInvois e-Pos untuk mengaktifkan cetakan." else "Please login to the MyInvois e-Pos app to enable printing."
 
                     val authPrinter = PrinterInfo.Builder(
                         authId, 
@@ -167,11 +186,16 @@ class MyPrintService : PrintService() {
                 val isSunmiHandheld = manufacturer.contains("SUNMI") && 
                                      (model.contains("V3") || model.contains("V2") || model.contains("P2"))
 
-                // 3. DEFINE MEDIA SIZES
-                val mediaSunmi58 = MediaSize("SUNMI_58", "58mm (Small)", 2280, 50000)
-                val mediaSunmi80 = MediaSize("SUNMI_80", "80mm (Large)", 3150, 50000)
-                val mediaEpos = MediaSize("EPOS_SETTING", "MyInvois e-Pos Printer", 3150, 23620)
-                val res203 = Resolution("R203", "Standard (203 dpi)", 203, 203)
+                // 3. DEFINE MEDIA SIZES (TRANSLATED)
+                val labelSmall = if (langCode == "ms") "58mm (Kecil)" else "58mm (Small)"
+                val labelLarge = if (langCode == "ms") "80mm (Besar)" else "80mm (Large)"
+                val labelSetting = if (langCode == "ms") "Tetapan Pencetak MyInvois e-Pos" else "MyInvois e-Pos Printer"
+                val labelStandard = if (langCode == "ms") "Standard (203 dpi)" else "Standard (203 dpi)"
+
+                val mediaSunmi58 = MediaSize("SUNMI_58", labelSmall, 2280, 50000)
+                val mediaSunmi80 = MediaSize("SUNMI_80", labelLarge, 3150, 50000)
+                val mediaEpos = MediaSize("EPOS_SETTING", labelSetting, 3150, 23620)
+                val res203 = Resolution("R203", labelStandard, 203, 203)
 
                 fun addBluetoothPrinters() {
                     if (bluetoothAdapter != null && bluetoothAdapter.isEnabled) {
@@ -182,7 +206,9 @@ class MyPrintService : PrintService() {
 
                                 val printerId = generatePrinterId(device.address)
                                 val capsBuilder = PrinterCapabilitiesInfo.Builder(printerId)
-                                val devName = (device.name ?: "Unknown").uppercase()
+                                
+                                val unknownName = if (langCode == "ms") "Tidak Diketahui" else "Unknown"
+                                val devName = (device.name ?: unknownName).uppercase()
                                 
                                 val likely80mm = devName.contains("80") || devName.contains("MTP-3") || devName.contains("T80")
                                 val likely58mm = devName.contains("58") || 
@@ -205,7 +231,8 @@ class MyPrintService : PrintService() {
                                 capsBuilder.addResolution(res203, true)
                                 capsBuilder.setMinMargins(PrintAttributes.Margins(0, 0, 0, 0))
 
-                                printers.add(PrinterInfo.Builder(printerId, device.name ?: "BT Printer", PrinterInfo.STATUS_IDLE)
+                                val defaultName = if (langCode == "ms") "Pencetak BT" else "BT Printer"
+                                printers.add(PrinterInfo.Builder(printerId, device.name ?: defaultName, PrinterInfo.STATUS_IDLE)
                                     .setCapabilities(capsBuilder.build()).build())
                             }
                         } catch (e: SecurityException) {
@@ -223,7 +250,10 @@ class MyPrintService : PrintService() {
                     capsBuilder.setColorModes(PrintAttributes.COLOR_MODE_MONOCHROME, PrintAttributes.COLOR_MODE_MONOCHROME)
                     capsBuilder.addResolution(res203, true)
                     capsBuilder.setMinMargins(PrintAttributes.Margins(0, 0, 0, 0))
-                    printers.add(PrinterInfo.Builder(dummyId, "No Printer Found", PrinterInfo.STATUS_IDLE)
+                    
+                    val noPrinterText = if (langCode == "ms") "Tiada Pencetak Ditemui" else "No Printer Found"
+                    
+                    printers.add(PrinterInfo.Builder(dummyId, noPrinterText, PrinterInfo.STATUS_IDLE)
                         .setCapabilities(capsBuilder.build()).build())
                 }
                 
@@ -244,12 +274,14 @@ class MyPrintService : PrintService() {
             return
         }
 
+        val langCode = getCurrentLanguage()
         val info = printJob.info
         val printerId = info.printerId
         val rawFileDescriptor = printJob.document.data 
 
         if (printerId == null || rawFileDescriptor == null) {
-            printJob.fail("Invalid Job Data")
+            val errorMsg = if (langCode == "ms") "Data Kerja Tidak Sah" else "Invalid Job Data"
+            printJob.fail(errorMsg)
             return
         }
 
@@ -350,7 +382,8 @@ class MyPrintService : PrintService() {
                             socket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
                             socket.connect()
                         } catch (e2: Exception) {
-                            errorMessage = "Connection Failed: ${e2.message}"
+                            val connFailText = if (langCode == "ms") "Sambungan Gagal: " else "Connection Failed: "
+                            errorMessage = "$connFailText${e2.message}"
                             return@execute 
                         }
                     }
@@ -375,7 +408,8 @@ class MyPrintService : PrintService() {
                             outputStream.write(FEED_PAPER)
                             outputStream.write(CUT_PAPER)
                         } else {
-                            Log.d(TAG, "Skipping Print - Page was Blank")
+                            val skipText = if (langCode == "ms") "Langkau Cetak - Halaman Kosong" else "Skipping Print - Page was Blank"
+                            Log.d(TAG, skipText)
                         }
 
                         try { Thread.sleep(1500) } catch (e: InterruptedException) { }
@@ -388,7 +422,8 @@ class MyPrintService : PrintService() {
                 }
 
             } catch (e: Exception) {
-                errorMessage = "Error: ${e.message}"
+                val errPrefix = if (langCode == "ms") "Ralat: " else "Error: "
+                errorMessage = "$errPrefix${e.message}"
                 Log.e(TAG, errorMessage, e)
             } finally {
                 // Cleanup
