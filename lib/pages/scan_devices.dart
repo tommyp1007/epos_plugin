@@ -100,8 +100,19 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
         }
       } else if (Platform.isIOS) {
         // iOS: Check if adapter is on
-        var state = await fbp.FlutterBluePlus.adapterState.first;
-        if (state != fbp.BluetoothAdapterState.on) {
+        // FIX: Instead of checking instantly (which fails if state is transitioning), 
+        // we wait up to 3 seconds for the state to become 'on'.
+        try {
+          var state = await fbp.FlutterBluePlus.adapterState.first;
+          if (state != fbp.BluetoothAdapterState.on) {
+            // Wait for it to turn on
+             await fbp.FlutterBluePlus.adapterState
+                 .where((s) => s == fbp.BluetoothAdapterState.on)
+                 .first
+                 .timeout(const Duration(seconds: 3));
+          }
+        } catch (e) {
+          // If it timed out (meaning it really is OFF), show the error
            _showSnackBar(lang.translate('msg_bt_on'));
            return;
         }
@@ -147,11 +158,20 @@ class _ScanDevicesPageState extends State<ScanDevicesPage> {
       } else if (Platform.isIOS) {
         // --- iOS LOGIC (BLE via fbp) ---
         
-        // 1. Check Adapter State (Double check)
-        if (await fbp.FlutterBluePlus.adapterState.first != fbp.BluetoothAdapterState.on) {
-          _showSnackBar(lang.translate('msg_bt_on'));
-          _stopScan();
-          return;
+        // 1. Check Adapter State (Double check with same logic)
+        try {
+          var state = await fbp.FlutterBluePlus.adapterState.first;
+          if (state != fbp.BluetoothAdapterState.on) {
+             // Wait one last time just to be safe
+             await fbp.FlutterBluePlus.adapterState
+                 .where((s) => s == fbp.BluetoothAdapterState.on)
+                 .first
+                 .timeout(const Duration(seconds: 1));
+          }
+        } catch (e) {
+           _showSnackBar(lang.translate('msg_bt_on'));
+           _stopScan();
+           return;
         }
 
         // 2. Fetch System Devices (Already connected in iOS Settings)
