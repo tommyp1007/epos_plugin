@@ -1,6 +1,6 @@
 workflows:
   ios-unsigned-fix:
-    name: iOS Unsigned (Auto-Repair)
+    name: iOS Unsigned (Share Extension Build)
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
@@ -9,26 +9,20 @@ workflows:
       cocoapods: default
     
     scripts:
-      - name: Repair Corrupted Xcode Project
+      - name: Clean Build Artifacts
         script: |
-          # 1. Delete the corrupted project settings file from the repo
-          echo "Deleting damaged Runner.xcodeproj..."
-          rm -rf ios/Runner.xcodeproj
-          
-          # 2. Force Flutter to regenerate the ios project structure
-          # This creates a fresh, working project file while keeping your code/Info.plist
-          echo "Regenerating iOS project..."
-          flutter create . --platforms ios
+          # INSTEAD OF DELETING THE PROJECT, WE JUST CLEAN
+          flutter clean
+          rm -rf ios/Pods
+          rm -f ios/Podfile.lock
 
       - name: Get Flutter packages
         script: |
-          # 3. Download Dart dependencies
           flutter pub get
 
       - name: Configure Podfile with Permissions
         script: |
-          # 4. Overwrite ios/Podfile with the correct configuration
-          # This ensures we have the Permission Macros and iOS 13 targets
+          # Overwrite ios/Podfile to ensure iOS 13 and permissions
           cat <<EOF > ios/Podfile
           platform :ios, '13.0'
           ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -61,8 +55,10 @@ workflows:
             use_modular_headers!
 
             flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-
-            target 'RunnerTests' do
+            
+            # --- SHARE EXTENSION TARGET ---
+            # This ensures the extension has access to necessary pods if needed
+            target 'ShareExtension' do
               inherit! :search_paths
             end
           end
@@ -70,12 +66,8 @@ workflows:
           post_install do |installer|
             installer.pods_project.targets.each do |target|
               flutter_additional_ios_build_settings(target)
-
               target.build_configurations.each do |config|
-                # Force iOS 13.0 deployment target
                 config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-
-                # Permission Macros
                 config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
                   '\$(inherited)',
                   'PERMISSION_CAMERA=1',
@@ -91,31 +83,27 @@ workflows:
 
       - name: Install Pods
         script: |
-          # 5. Install iOS dependencies using the custom Podfile
           cd ios
-          rm -rf Pods
-          rm -f Podfile.lock
           pod install
           cd ..
 
       - name: Build iOS App (No Codesign)
         script: |
-          # 6. Build the Release version, skipping code signing
+          # Build Release without signing
           flutter build ios --release --no-codesign
 
       - name: Package as IPA
         script: |
-          # 7. Navigate to the build output
           cd build/ios/iphoneos
           
-          # 8. Create the IPA folder structure (Payload/Runner.app)
+          # Create IPA structure
           mkdir Payload
           mv Runner.app Payload/
           
-          # 9. Zip it into an IPA (using -y to preserve symlinks)
+          # Zip into IPA
           zip -r -y app_unsigned.ipa Payload/
           
-          # 10. Export artifact
+          # Export
           mv app_unsigned.ipa $CM_EXPORT_DIR/runner_unsigned.ipa
 
     artifacts:

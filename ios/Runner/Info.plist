@@ -63,7 +63,7 @@
             <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>ShareMedia-$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+                <string>ShareMedia-group.com.example.eposprinter</string>
             </array>
         </dict>
     </array>
@@ -98,5 +98,11 @@
             </array>
         </dict>
     </array>
+    
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
 </dict>
 </plist>
