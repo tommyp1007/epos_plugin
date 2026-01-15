@@ -50,8 +50,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   // SAFETY LIMIT: Prevent more than 5 jobs in memory
   static const int _maxQueueSize = 5;
 
-  // Defaults to 576 (80mm) per 'MyInvois e-Pos Printer' specs
-  int _printerWidth = 576; 
+  // Defaults to 384 (58mm) to match WidthSettings default, but will be overwritten by prefs
+  int _printerWidth = 384; 
 
   @override
   void initState() {
@@ -63,24 +63,31 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       
-      // FIX: Use 'printer_width_dots', NOT 'flutter.printer_width_dots'
-      // SharedPreferences abstract the prefix on the Dart side.
-      int savedWidth = prefs.getInt('printer_width_dots') ?? -1;
+      // ---------------------------------------------------------
+      // 1. SYNC WITH WidthSettings PAGE
+      // We read 'printer_width_dots'. 
+      // Note: In Flutter SharedPreferences, we use the key directly. 
+      // (The prefix 'flutter.' is added internally when writing to native storage, 
+      // so we don't type it here).
+      // ---------------------------------------------------------
+      int? savedWidth = prefs.getInt('printer_width_dots');
       
-      if (savedWidth > 0) {
+      if (savedWidth != null && savedWidth > 0) {
         _printerWidth = savedWidth;
+        debugPrint("Loaded Printer Width from Settings: $_printerWidth dots");
       } else {
-        _printerWidth = 576; 
+        // Fallback default if nothing saved
+        _printerWidth = 384; 
+        debugPrint("No settings found. Using default: $_printerWidth dots");
       }
 
+      // 2. Now that we have the width, prepare the document
       await _prepareDocument();
+      
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = e.toString();
-          _isLoadingDoc = false;
-        });
-      }
+      debugPrint("Error loading settings: $e");
+      // Proceed with defaults if settings fail
+      await _prepareDocument();
     }
   }
 
@@ -129,6 +136,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
 
       // 4. Start Heavy Processing for Thermal Printer (Background)
+      // We pass the loaded _printerWidth here
       _generateThermalPrintData(rawBytes, ext == 'pdf');
 
     } catch (e) {
@@ -164,7 +172,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         if (trimmed == null) continue;
 
         // B. Resize to Printer Width (Cubic for quality)
-        // THIS IS WHERE YOUR SETTING IS APPLIED
+        // THIS USES THE WIDTH LOADED FROM SETTINGS
         img.Image resized = img.copyResize(
           trimmed, 
           width: _printerWidth, 
