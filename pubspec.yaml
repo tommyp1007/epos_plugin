@@ -54,6 +54,8 @@ dependencies:
   cupertino_icons: ^1.0.8        # iOS style icons
   webview_flutter: ^4.13.0       # Render web content
 
+  android_intent_plus: ^6.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
