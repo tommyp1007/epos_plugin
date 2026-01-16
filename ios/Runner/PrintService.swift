@@ -5,9 +5,9 @@ import CoreGraphics
 import UserNotifications
 
 // MARK: - Printer Service
-class PrinterService: NSObject {
+class PrintService: NSObject {
     
-    static let shared = PrinterService()
+    static let shared = PrintService()
     
     // Configuration
     private let WIDTH_58MM: Int = 384
@@ -332,7 +332,7 @@ class PrinterService: NSObject {
 }
 
 // MARK: - Bluetooth Delegate
-extension PrinterService: CBCentralManagerDelegate, CBPeripheralDelegate {
+extension PrintService: CBCentralManagerDelegate, CBPeripheralDelegate {
     
     func startScan() {
         centralManager.scanForPeripherals(withServices: nil, options: nil)

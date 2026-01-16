@@ -34,8 +34,8 @@ import UIKit
           let fileUrl = URL(fileURLWithPath: path)
           
           // 4. Call your Native Printer Service
-          // The service handles the background task, queue, and bluetooth connection
-          PrinterService.shared.printPdf(fileUrl: fileUrl, macAddress: mac)
+          // UPDATED: Changed from PrinterService -> PrintService
+          PrintService.shared.printPdf(fileUrl: fileUrl, macAddress: mac)
           
           // Send success back to Flutter
           result("Success")
