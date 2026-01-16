@@ -328,6 +328,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       ),
       backgroundColor: Colors.grey[200],
       body: Stack(
+        // --- THIS IS THE FIX ---
+        fit: StackFit.expand, 
+        // -----------------------
         children: [
           // 1. CONTENT LAYER
           if (_isLoading)
