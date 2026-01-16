@@ -266,21 +266,36 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         return;
       }
 
+      // -------------------------------------------------------------
+      // SPEED OPTIMIZATION FIX
+      // -------------------------------------------------------------
       // Construct ESC/POS Commands
-      List<int> bytesToPrint = [];
-      bytesToPrint += [0x1B, 0x40]; // Init
-      bytesToPrint += [27, 97, 1]; // Center align
+      List<int> fullBytes = [];
+      fullBytes += [0x1B, 0x40]; // Init
+      fullBytes += [27, 97, 1]; // Center align
       
       // Combine all chunks seamlessly
       for (var processedBytes in _readyToPrintChunks) {
-        bytesToPrint += processedBytes;
+        fullBytes += processedBytes;
       }
       
       // Footer Commands (Feed & Cut)
-      bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
-      bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
+      fullBytes += [0x1B, 0x64, 0x04]; // Feed 4 lines
+      fullBytes += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
-      await widget.printerService.sendBytes(bytesToPrint);
+      // Send data in chunks to prevent printer buffer overflow (The Stutter Fix)
+      // Most thermal printers have a buffer size of 4KB to 8KB.
+      const int chunkSize = 2048; // 2KB chunks are safe and fast
+      for (var i = 0; i < fullBytes.length; i += chunkSize) {
+        int end = (i + chunkSize < fullBytes.length) ? i + chunkSize : fullBytes.length;
+        List<int> chunk = fullBytes.sublist(i, end);
+        
+        await widget.printerService.sendBytes(chunk);
+        
+        // Tiny sleep to allow printer buffer to clear slightly
+        // 5ms is usually enough to maintain continuous speed without stuttering
+        await Future.delayed(const Duration(milliseconds: 5));
+      }
 
       if (mounted) {
         _showSnackBar("${lang.translate('msg_added_queue')} (${widget.printerService.pendingJobs} pending)");
@@ -571,8 +586,8 @@ class PrintUtils {
           grayPlane[idx] = clamp(grayPlane[idx] + (error * 5 ~/ 16));
           
           if (x + 1 < width) {
-              int idx = i + width + 1;
-              grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
+            int idx = i + width + 1;
+            grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
           }
         }
       }
