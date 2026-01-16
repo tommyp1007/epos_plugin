@@ -18,9 +18,15 @@ class ApiUrls {
   };
   
   static String getLogoutUrl(String baseUrl) {
-    if (baseUrl == dev) return devLogout;
-    if (baseUrl == uat) return uatLogout;
-    if (baseUrl == preProd) return preProdLogout;
-    return productionLogout;
+    // Remove trailing slash for cleaner comparison
+    String cleanUrl = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    
+    if (cleanUrl == dev) return devLogout;
+    if (cleanUrl == uat) return uatLogout;
+    if (cleanUrl == preProd) return preProdLogout;
+    if (cleanUrl == production) return productionLogout;
+    
+    // Fallback: Append standard Odoo logout path
+    return '$cleanUrl/session/logout';
   }
 }

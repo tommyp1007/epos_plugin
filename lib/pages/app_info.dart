@@ -7,14 +7,18 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../services/language_service.dart';
 import '../utils/api_urls.dart';
-import 'login_page.dart'; // Import LoginPage explicitly to use MaterialPageRoute
+import 'login_page.dart'; 
 
 class AppInfoPage extends StatelessWidget {
   final String? connectedDeviceName;
 
   const AppInfoPage({Key? key, this.connectedDeviceName}) : super(key: key);
 
+  // --- ANDROID SPECIFIC: Battery Optimization ---
   Future<void> _requestBatteryOptimizationManual() async {
+    // We wrap this in a check to ensure it never runs on iOS
+    if (!Platform.isAndroid) return;
+
     var status = await Permission.ignoreBatteryOptimizations.status;
 
     if (status.isGranted) {
@@ -27,31 +31,33 @@ class AppInfoPage extends StatelessWidget {
     }
   }
 
-  // --- UPDATED LOGOUT FUNCTIONALITY ---
+  // --- LOGOUT HANDLER (iOS & Android Compatible) ---
   Future<void> _handleLogout(BuildContext context) async {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // 1. Retrieve the current environment URL (e.g. PreProd)
-      // If null, fallback to PreProd (since you are testing on PreProd)
+      // 1. Get current base URL so we don't accidentally switch environments
+      // If null, fallback to PreProd (since you are likely testing on PreProd)
       String currentBaseUrl = prefs.getString('env_url') ?? ApiUrls.preProd;
 
-      // 2. Clear Local Auth Flag
+      // 2. Clear Local Session Flag
       await prefs.setBool('is_logged_in', false);
 
-      // 3. Clear WebView Cookies (Crucial for session reset)
+      // 3. Clear WebView Cookies 
+      // This is crucial for iOS. If you don't do this, the WebView 
+      // might remember the previous session (Odoo session_id) even after the app restarts.
       final cookieManager = WebViewCookieManager();
       await cookieManager.clearCookies();
 
-      // 4. Navigate back to Login Page
-      // FIX: Use MaterialPageRoute to forcefully pass the 'currentBaseUrl' and 'isLogout' flag.
-      // This ensures we stay on the SAME environment (e.g. PreProd) and don't default to Production.
+      // 4. Navigate to LoginPage in "Logout Mode"
+      // We use pushAndRemoveUntil to clear the navigation stack, 
+      // so the user cannot click "Back" to return to the settings.
       if (context.mounted) {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
             builder: (context) => LoginPage(
-              url: currentBaseUrl, // Keep the same environment
-              isLogout: true,      // Trigger server logout logic
+              url: currentBaseUrl, 
+              isLogout: true, // Triggers the /session/logout logic in LoginPage
             ),
           ),
           (route) => false, // Remove all previous routes
@@ -158,7 +164,7 @@ class AppInfoPage extends StatelessWidget {
                     style: const TextStyle(color: Colors.grey)
                   ),
 
-                  // --- MANUAL BATTERY OPTIMIZATION FIX ---
+                  // --- MANUAL BATTERY OPTIMIZATION FIX (Android Only) ---
                   if (Platform.isAndroid) ...[
                     const SizedBox(height: 15),
                     TextButton.icon(
