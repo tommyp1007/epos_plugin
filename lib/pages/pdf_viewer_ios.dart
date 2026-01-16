@@ -5,7 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Still needed for rootBundle/UI
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
@@ -36,9 +36,7 @@ class PdfViewerPage extends StatefulWidget {
 }
 
 class _PdfViewerPageState extends State<PdfViewerPage> {
-  // REMOVED: static const platform = MethodChannel('com.zen.printer/channel');
-
-  // Configuration (Matched to Swift)
+  // Configuration
   final int WIDTH_58MM = 384;
   final int WIDTH_80MM = 576;
   final List<int> INIT_PRINTER = [0x1B, 0x40];
@@ -61,22 +59,41 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   @override
   void initState() {
     super.initState();
-    _loadAndGeneratePreview();
+    // Initial standard preview load
+    _loadAndGeneratePreview(initialLoad: true);
   }
 
   @override
   void dispose() {
     _transformController.dispose();
-    // Disconnect on dispose if desired, or keep alive
-    // _connectedDevice?.disconnect(); 
     super.dispose();
   }
 
-  // ... [Existing File Loading Logic Kept Same] ...
-  Future<void> _loadAndGeneratePreview() async {
+  // =========================================================
+  // MARK: - FILE PREPARATION
+  // =========================================================
+
+  Future<void> _loadAndGeneratePreview({bool initialLoad = false}) async {
     try {
       if (mounted) setState(() => _isLoading = true);
-      await _prepareFile();
+      
+      if (initialLoad) {
+        await _prepareFile();
+      }
+
+      // If it's a reload or initial load, we generate a standard preview (150 DPI)
+      // The high-res 400% preview happens when clicking "Print"
+      if (_localFile != null && _previewBytes.isEmpty) {
+         await _generatePreviewImages(dpi: 150);
+      }
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+        if (widget.autoPrint && initialLoad) {
+          // Default to 58mm for auto-print or logic needs to be defined
+          Future.delayed(const Duration(milliseconds: 500), () => _startPrintProcess(WIDTH_58MM));
+        }
+      }
     } catch (e) {
       if (mounted) {
         final lang = Provider.of<LanguageService>(context, listen: false);
@@ -85,6 +102,47 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _prepareFile() async {
+    String cleanPath = widget.filePath;
+    if (cleanPath.toLowerCase().startsWith('http')) {
+      _localFile = await _downloadFile(cleanPath);
+    } else {
+      try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) { debugPrint("URI Decode Error: $e"); }
+      if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
+      _localFile = await _copyFileSecurely(cleanPath);
+    }
+  }
+
+  /// Generates images from the file and updates _previewBytes
+  Future<void> _generatePreviewImages({double dpi = 150}) async {
+    if (_localFile == null) return;
+    
+    final String ext = _localFile!.path.split('.').last.toLowerCase();
+    bool isPdf = ext == 'pdf' || _localFile!.path.endsWith('pdf');
+    List<Uint8List> newImages = [];
+
+    if (isPdf) {
+      final pdfBytes = await _localFile!.readAsBytes();
+      // Rasterize using Printing package
+      await for (var page in Printing.raster(pdfBytes, dpi: dpi)) {
+        final pngBytes = await page.toPng();
+        newImages.add(pngBytes);
+      }
+    } else {
+      final bytes = await _localFile!.readAsBytes();
+      // If it's an image, we might want to scale it up if DPI is high, 
+      // but for simplicity, we just reload bytes. 
+      // Real scaling happens in the print processor for images.
+      newImages.add(bytes);
+    }
+
+    if (mounted) {
+      setState(() {
+        _previewBytes = newImages;
+      });
     }
   }
 
@@ -105,46 +163,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
   }
 
-  Future<void> _prepareFile() async {
-    final lang = Provider.of<LanguageService>(context, listen: false);
-    String cleanPath = widget.filePath;
-
-    try {
-      if (cleanPath.toLowerCase().startsWith('http')) {
-        _localFile = await _downloadFile(cleanPath);
-      } else {
-        try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) { debugPrint("URI Decode Error: $e"); }
-        if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
-        _localFile = await _copyFileSecurely(cleanPath);
-      }
-
-      final String ext = _localFile!.path.split('.').last.toLowerCase();
-      bool isPdf = ext == 'pdf' || _localFile!.path.endsWith('pdf');
-
-      _previewBytes.clear();
-
-      if (isPdf) {
-        final pdfBytes = await _localFile!.readAsBytes();
-        // Preview at standard DPI
-        await for (var page in Printing.raster(pdfBytes, dpi: 150)) {
-          final pngBytes = await page.toPng();
-          if (mounted) setState(() => _previewBytes.add(pngBytes));
-        }
-      } else {
-        final bytes = await _localFile!.readAsBytes();
-        if (mounted) setState(() => _previewBytes.add(bytes));
-      }
-
-      if (mounted) {
-        setState(() => _isLoading = false);
-        if (widget.autoPrint) Future.delayed(const Duration(milliseconds: 500), _doPrint);
-      }
-
-    } catch (e) {
-      if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoading = false; });
-    }
-  }
-
   Future<File> _downloadFile(String url) async {
     final http.Response response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
@@ -159,52 +177,133 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   // =========================================================
-  // MARK: - NEW DART PRINTING LOGIC (Replaces Swift)
+  // MARK: - PRINT FLOW UI
   // =========================================================
 
-  Future<void> _doPrint() async {
+  void _showPrintOptions(BuildContext context) {
     final lang = Provider.of<LanguageService>(context, listen: false);
-    if (_localFile == null) {
-      _showSnackBar(lang.translate('err_file_not_found'), isError: true);
-      return;
-    }
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext ctx) {
+        return SafeArea(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  lang.translate('btn_print_receipt'), // Or "Select Paper Size"
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text("Select paper roll size to scale document:", style: TextStyle(color: Colors.grey[600])),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildOptionBtn(
+                        label: "58mm", 
+                        icon: Icons.receipt_long, 
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _startPrintProcess(WIDTH_58MM);
+                        }
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _buildOptionBtn(
+                        label: "80mm", 
+                        icon: Icons.receipt, 
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _startPrintProcess(WIDTH_80MM);
+                        }
+                      ),
+                    ),
+                  ],
+                )
+              ],
+            ),
+          ),
+        );
+      }
+    );
+  }
 
+  Widget _buildOptionBtn({required String label, required IconData icon, required VoidCallback onTap}) {
+    return ElevatedButton(
+      onPressed: onTap,
+      style: ElevatedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        backgroundColor: Colors.blue[50],
+        foregroundColor: Colors.blue[800],
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.blue.shade100)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 30),
+          const SizedBox(height: 8),
+          Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  // =========================================================
+  // MARK: - PRINT LOGIC
+  // =========================================================
+
+  Future<void> _startPrintProcess(int targetWidth) async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
+    
     setState(() => _isPrinting = true);
+    
+    // 1. UPDATE PREVIEW (Scale to 400% / 300 DPI)
+    // We do this on Main Thread because Platform Channels (Printing) often require it.
+    // This updates the UI so the user sees the "Latest" look.
+    try {
+       await _generatePreviewImages(dpi: 300); // ~400% scale relative to screen 72dpi
+    } catch (e) {
+       debugPrint("Preview generation failed: $e");
+    }
 
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
       
-      // 1. Get Settings
+      // 2. CONNECT BLUETOOTH
       String targetMac = widget.connectedMac ?? prefs.getString('selected_printer_mac') ?? "";
-      int savedWidth = prefs.getInt('printer_width_dots') ?? 0;
-      
-      // 2. Connect to Bluetooth
       await _connectBluetooth(targetMac);
 
       if (_connectedDevice == null || _writeCharacteristic == null) {
         throw Exception("Printer not found or disconnected");
       }
 
-      // 3. Determine Width based on Name (Logic from Swift)
-      int targetWidth = savedWidth > 0 ? savedWidth : WIDTH_58MM;
-      String devName = _connectedDevice!.platformName.toUpperCase();
-      if (devName.contains("80") || devName.contains("T80")) {
-        targetWidth = WIDTH_80MM;
-      }
+      // 3. PROCESS IMAGES IN BACKGROUND ISOLATE
+      // We pass the ALREADY rasterized PNG bytes (from step 1) to the isolate.
+      // This ensures the heavy pixel math (dithering) doesn't lag the UI.
+      if (_previewBytes.isEmpty) throw Exception("No image data to print");
 
-      // 4. Process PDF -> ESC/POS Bytes (Heavy Lifting)
-      // Run in isolate/compute to avoid freezing UI
-      List<int> dataToSend = await compute(_processPdfToEscPos, {
-        'fileBytes': await _localFile!.readAsBytes(),
-        'width': targetWidth,
+      final Map<String, dynamic> params = {
+        'imageBytesList': _previewBytes, // These are the high-res PNGs
+        'targetWidth': targetWidth,
         'init': INIT_PRINTER,
         'feed': FEED_PAPER,
         'cut': CUT_PAPER,
-        'isPdf': _localFile!.path.toLowerCase().endsWith('.pdf')
-      });
+      };
 
-      // 5. Send Bytes
+      // Run computationally expensive task in background
+      List<int> dataToSend = await compute(_convertPngsToEscPos, params);
+
+      // 4. SEND TO PRINTER
       await _sendToPrinter(dataToSend);
 
       if (mounted) _showSnackBar(lang.translate('msg_added_queue'));
@@ -216,31 +315,27 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
   }
 
-  /// Replaces Swift's `centralManager` logic
+  // =========================================================
+  // MARK: - BLUETOOTH HELPERS
+  // =========================================================
+
   Future<void> _connectBluetooth(String targetMac) async {
-    // If already connected, skip
     if (_connectedDevice != null && _writeCharacteristic != null) {
       if (_connectedDevice!.isConnected) return;
     }
 
-    // Start Scan
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-
     BluetoothDevice? foundDevice;
     
-    // Listen to scan results
     await for (var results in FlutterBluePlus.scanResults) {
       for (ScanResult r in results) {
         String name = r.device.platformName;
         String id = r.device.remoteId.str;
         
-        // Match by MAC
         if (targetMac.isNotEmpty && id == targetMac) {
           foundDevice = r.device;
           break;
         }
-        
-        // Match by Name (Fallback logic from Swift)
         if (targetMac.isEmpty && (name.contains("Printer") || name.contains("MTP") || name.contains("InnerPrinter"))) {
           foundDevice = r.device;
           break;
@@ -267,113 +362,83 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
   }
 
-  /// Replaces Swift's `sendToPrinter` chunking loop
   Future<void> _sendToPrinter(List<int> data) async {
     if (_writeCharacteristic == null) return;
-    
-    // Swift uses 150 bytes. 
-    // FlutterBluePlus suggests adapting to MTU, but 150 is safe for legacy printers.
     const int chunkSize = 150; 
     
     for (int i = 0; i < data.length; i += chunkSize) {
       int end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
       List<int> chunk = data.sublist(i, end);
-      
-      // Write logic
       await _writeCharacteristic!.write(chunk, withoutResponse: true);
-      
-      // Swift: usleep(20000) -> Dart: 20ms delay
       await Future.delayed(const Duration(milliseconds: 20));
     }
   }
 
   // =========================================================
-  // MARK: - IMAGE PROCESSING (Isolate Static Methods)
+  // MARK: - BACKGROUND PROCESSING (ISOLATE)
   // =========================================================
 
-  /// Top level function to handle heavy image processing
-  static Future<List<int>> _processPdfToEscPos(Map<String, dynamic> params) async {
-    Uint8List fileBytes = params['fileBytes'];
-    int targetWidth = params['width'];
+  /// Pure Dart function to run in 'compute'
+  /// Input: List of PNG bytes (Uint8List), target width, commands
+  /// Output: Full ESC/POS bytes
+  static Future<List<int>> _convertPngsToEscPos(Map<String, dynamic> params) async {
+    List<Uint8List> sourceImages = params['imageBytesList'];
+    int targetWidth = params['targetWidth'];
     List<int> initCmd = params['init'];
     List<int> feedCmd = params['feed'];
     List<int> cutCmd = params['cut'];
-    bool isPdf = params['isPdf'];
 
     List<int> dataToSend = [];
-    
-    // Header
     dataToSend.addAll(initCmd);
-    dataToSend.addAll([0x1B, 0x61, 0x01]); // Align Center
+    dataToSend.addAll([0x1B, 0x61, 0x01]); // Center Align
 
-    List<img.Image> rawImages = [];
-
-    if (isPdf) {
-      // Use Printing package to rasterize PDF to Image at high DPI (2.0 scale approx)
-      await for (var page in Printing.raster(fileBytes, dpi: 200)) {
-        final png = await page.toPng();
-        final image = img.decodePng(png);
-        if (image != null) rawImages.add(image);
-      }
-    } else {
-      final image = img.decodeImage(fileBytes);
-      if (image != null) rawImages.add(image);
-    }
-
-    // Max 50 pages (Logic from Swift)
-    int count = math.min(rawImages.length, 50);
+    // Max 50 pages to prevent overflow
+    int count = math.min(sourceImages.length, 50);
 
     for (int i = 0; i < count; i++) {
-      img.Image src = rawImages[i];
+      // Decode the high-res PNG
+      img.Image? src = img.decodePng(sourceImages[i]);
+      if (src == null) continue;
 
-      // 1. Trim Whitespace (Replicates Swift's trim())
+      // 1. Trim Whitespace
       img.Image? trimmed = _trimImage(src);
-      if (trimmed == null) continue; // Skip blank
+      if (trimmed == null) continue;
 
-      // 2. Resize to Printer Width (Replicates Swift's resize())
+      // 2. Resize to Printer Width (High Quality Cubic Interpolation)
       img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
 
-      // 3. Convert to Bytes (Replicates Swift's convertImageToEscPos)
-      List<int> escBytes = _convertImageToEscPos(resized);
+      // 3. Dither & Bit Pack
+      List<int> escBytes = _processImageToBytes(resized);
       dataToSend.addAll(escBytes);
     }
 
-    // Footer
     dataToSend.addAll(feedCmd);
     dataToSend.addAll(cutCmd);
-
     return dataToSend;
   }
 
-  /// Replicates Swift's `convertImageToEscPos` (Grayscale, Dither, PackBits)
-  static List<int> _convertImageToEscPos(img.Image src) {
+  static List<int> _processImageToBytes(img.Image src) {
     int width = src.width;
     int height = src.height;
-    
-    // Grayscale Array (Int array 0-255)
     List<int> grayPlane = List.filled(width * height, 255);
 
-    // 1. Grayscale + Contrast
+    // Grayscale + Contrast
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
-        // Extract RGB
         double r = p.r.toDouble();
         double g = p.g.toDouble();
         double b = p.b.toDouble();
-        
-        // Contrast Logic from Swift: clamp(val * 1.2 - 20)
+        // Contrast boost
         double rC = (r * 1.2 - 20).clamp(0, 255);
         double gC = (g * 1.2 - 20).clamp(0, 255);
         double bC = (b * 1.2 - 20).clamp(0, 255);
-        
-        // Luminance
         int gray = (0.299 * rC + 0.587 * gC + 0.114 * bC).toInt();
         grayPlane[y * width + x] = gray;
       }
     }
 
-    // 2. Dither (Floyd-Steinberg)
+    // Floyd-Steinberg Dithering
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         int i = y * width + x;
@@ -384,8 +449,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         int error = oldPixel - newPixel;
         
         if (x + 1 < width) {
-          int idx = i + 1;
-          grayPlane[idx] = (grayPlane[idx] + error * 7 / 16).toInt().clamp(0, 255);
+           int idx = i + 1;
+           grayPlane[idx] = (grayPlane[idx] + error * 7 / 16).toInt().clamp(0, 255);
         }
         if (y + 1 < height) {
            if (x - 1 >= 0) {
@@ -402,11 +467,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
     }
 
-    // 3. Pack Bits (GS v 0)
+    // Pack Bits (GS v 0 format)
     List<int> escPosData = [];
     int widthBytes = (width + 7) ~/ 8;
     
-    // Header
     escPosData.addAll([0x1D, 0x76, 0x30, 0x00]);
     escPosData.add(widthBytes % 256);
     escPosData.add(widthBytes ~/ 256);
@@ -419,7 +483,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         for (int bit = 0; bit < 8; bit++) {
           int x = xByte * 8 + bit;
           if (x < width) {
-            // If black (0), set bit
             if (grayPlane[y * width + x] == 0) {
               byteValue |= (1 << (7 - bit));
             }
@@ -428,18 +491,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         escPosData.add(byteValue);
       }
     }
-
     return escPosData;
   }
 
-  /// Replicates Swift's `trim` logic manually
   static img.Image? _trimImage(img.Image src) {
     int width = src.width;
     int height = src.height;
-    int minX = width;
-    int maxX = 0;
-    int minY = height;
-    int maxY = 0;
+    int minX = width, maxX = 0, minY = height, maxY = 0;
     bool foundContent = false;
     int threshold = 240;
 
@@ -457,8 +515,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
 
     if (!foundContent) return null;
-
-    // Padding = 1
     minX = math.max(0, minX - 1);
     maxX = math.min(width, maxX + 1);
     minY = math.max(0, minY - 1);
@@ -478,6 +534,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     );
   }
 
+  // =========================================================
+  // MARK: - BUILD
+  // =========================================================
+
   @override
   Widget build(BuildContext context) {
     final lang = Provider.of<LanguageService>(context);
@@ -489,7 +549,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : _loadAndGeneratePreview,
+            onPressed: _isLoading ? null : () => _loadAndGeneratePreview(initialLoad: true),
           )
         ],
       ),
@@ -500,6 +560,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const CircularProgressIndicator(),
+                const SizedBox(height: 10),
+                Text(_isPrinting ? "Scaling & Processing..." : "Loading...", style: const TextStyle(color: Colors.grey)),
                 if (_errorMessage.isNotEmpty) ...[
                   const SizedBox(height: 20),
                   Padding(
@@ -579,7 +641,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                         backgroundColor: Colors.blueAccent,
                         elevation: 0,
                       ),
-                      onPressed: _isPrinting ? null : _doPrint,
+                      // CHANGED: Now opens the option dialog instead of printing immediately
+                      onPressed: _isPrinting ? null : () => _showPrintOptions(context),
                     ),
                   ),
                 ),
