@@ -43,12 +43,14 @@ Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
   // (Prevents transparent PDF backgrounds from turning into black bars)
   img.Image flatImage = PrintUtils.flattenToWhite(decoded);
 
-  // 2. Trim WhiteSpace (Top/Bottom) to ensure seamless joining
+  // 2. Prepare Display Image (Use Full Untrimmed Image for UI Preview)
+  // This ensures the screen preview looks exactly like the PDF page.
+  final Uint8List displayBytes = Uint8List.fromList(img.encodePng(flatImage));
+
+  // 3. Trim WhiteSpace (Top/Bottom) ONLY for Printer
+  // (Ensures seamless joining on thermal paper)
   img.Image? trimmed = PrintUtils.trimWhiteSpace(flatImage);
   trimmed ??= flatImage; // If page is empty/cannot trim, use original flattened
-
-  // 3. Prepare Display Image (High Quality PNG for UI)
-  final Uint8List displayBytes = Uint8List.fromList(img.encodePng(trimmed));
 
   // 4. Resize for Printer (Width Adjustment)
   img.Image printerVer = img.copyResize(
@@ -138,7 +140,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
         fileToProcess = File(cleanPath);
-         
+          
         if (!await fileToProcess.exists()) {
           throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
         }
@@ -215,7 +217,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     if (await widget.printerService.isConnected()) return true;
     final prefs = await SharedPreferences.getInstance();
     final savedMac = prefs.getString('selected_printer_mac'); 
-     
+      
     if (savedMac != null && savedMac.isNotEmpty) {
        try { 
          return await widget.printerService.connect(savedMac); 
@@ -338,7 +340,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                       if (_previewImages.isEmpty && !_isProcessingPages)
                           // UPDATED: Use 'err_decode' (Could not decode content) as closest match
                           Center(child: Text(lang.translate('err_decode'))),
-                      
+                       
                       // Render all pages
                       ..._previewImages.map((bytes) => Container(
                         // VISUAL PREVIEW: Keep slight margin for UI, but actual print is seamless
