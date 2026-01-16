@@ -16,17 +16,17 @@ import 'package:printing/printing.dart';
 import 'package:image/image.dart' as img; 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 
-// NEW: ML Kit & Formatting
+// ML Kit & Formatting
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:intl/intl.dart';
-import 'package:barcode_widget/barcode_widget.dart' as bw; // Required for generating the new QR
+import 'package:barcode_widget/barcode_widget.dart' as bw; 
 
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
 
 // ==========================================
-// 1. DATA MODELS (To hold parsed Receipt Data)
+// 1. DATA MODELS
 // ==========================================
 class ReceiptItem {
   final String productName;
@@ -44,7 +44,7 @@ class ReceiptData {
   String orderNo;
   String receiptNo;
   String date;
-  String barcodePayload; // For the QR code
+  String barcodePayload;
   List<ReceiptItem> items;
   double subTotal;
   double tax;
@@ -95,7 +95,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
   bool _isLoading = true;
   bool _isPrinting = false;
-  bool _isConverting = false; // New: State for OCR
+  bool _isConverting = false;
   String _errorMessage = '';
 
   List<Uint8List> _previewBytes = [];
@@ -172,7 +172,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       if (isPdf) {
         final pdfBytes = await _localFile!.readAsBytes();
-        // Preview at standard DPI
         await for (var page in Printing.raster(pdfBytes, dpi: 150)) {
           final pngBytes = await page.toPng();
           if (mounted) setState(() => _previewBytes.add(pngBytes));
@@ -206,7 +205,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   // =========================================================
-  // MARK: - OCR & PARSING LOGIC (THE MAGIC)
+  // MARK: - OCR & PARSING LOGIC
   // =========================================================
 
   Future<void> _convertAndPrint() async {
@@ -223,7 +222,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       final Directory tempDir = await getTemporaryDirectory();
 
-      // 2. Scan every page (usually receipt is 1 page)
+      // 2. Scan every page
       for (int i = 0; i < _previewBytes.length; i++) {
         final tempFile = File('${tempDir.path}/ocr_page_$i.png');
         await tempFile.writeAsBytes(_previewBytes[i]);
@@ -233,7 +232,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
         fullText.writeln(recognizedText.text);
 
-        // Scan Barcode (if any)
+        // Scan Barcode
         if (foundQrCode == null) {
           final barcodes = await barcodeScanner.processImage(inputImage);
           for (Barcode barcode in barcodes) {
@@ -246,13 +245,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         await tempFile.delete();
       }
 
-      // 3. Parse Data into Receipt Object
+      // 3. Parse Data
       ReceiptData data = _parseTextToReceiptData(fullText.toString(), foundQrCode);
 
       textRecognizer.close();
       barcodeScanner.close();
 
-      // 4. Show Dialog with the "Odoo Style" Widget to capture it
+      // 4. Show Dialog with Capture Logic
       if (mounted) {
         await showDialog(
           context: context,
@@ -260,7 +259,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
           builder: (ctx) => AlertDialog(
             contentPadding: EdgeInsets.zero,
             content: SizedBox(
-              width: 400, // Simulate receipt width
+              width: 400,
               height: 600,
               child: Column(
                 children: [
@@ -273,11 +272,11 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                    Expanded(
                      child: SingleChildScrollView(
                        child: RepaintBoundary(
-                         key: _globalKey, // <--- Key to capture image
+                         key: _globalKey, // <--- Key must be in tree here
                          child: Container(
                            color: Colors.white,
                            padding: const EdgeInsets.all(10),
-                           child: OdooReceiptLayout(data: data), // The Custom Widget
+                           child: OdooReceiptLayout(data: data),
                          ),
                        ),
                      ),
@@ -292,9 +291,16 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                          ElevatedButton.icon(
                            icon: const Icon(Icons.print),
                            label: const Text("Print This"),
-                           onPressed: () {
-                             Navigator.pop(ctx);
-                             _captureAndPrint(); // Proceed to print
+                           onPressed: () async {
+                             // FIX: Capture BEFORE popping the dialog
+                             bool success = await _captureAndSaveReceipt();
+                             if (success) {
+                               Navigator.pop(ctx);
+                               // Small delay to allow dialog to close before printing starts
+                               Future.delayed(const Duration(milliseconds: 200), () {
+                                 _doPrint(); 
+                               });
+                             }
                            },
                          ),
                        ],
@@ -311,6 +317,41 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       _showSnackBar("OCR Failed: $e", isError: true);
     } finally {
       if(mounted) setState(() => _isConverting = false);
+    }
+  }
+
+  /// Captures the RepaintBoundary to a File and updates _localFile
+  Future<bool> _captureAndSaveReceipt() async {
+    try {
+      RenderRepaintBoundary? boundary = _globalKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      
+      if (boundary == null) {
+        debugPrint("Boundary not found");
+        return false;
+      }
+
+      // Capture image with higher pixel ratio for clarity
+      ui.Image image = await boundary.toImage(pixelRatio: 2.0); 
+      ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      
+      if (byteData != null) {
+        Uint8List pngBytes = byteData.buffer.asUint8List();
+        
+        final Directory tempDir = await getTemporaryDirectory();
+        final String tempPath = '${tempDir.path}/generated_receipt_${DateTime.now().millisecondsSinceEpoch}.png';
+        final File file = File(tempPath);
+        await file.writeAsBytes(pngBytes);
+
+        setState(() {
+          _localFile = file; // Switch current file to this new image
+          _previewBytes = [pngBytes]; // Update preview to show what will print
+        });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Capture Error: $e");
+      return false;
     }
   }
 
@@ -333,7 +374,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     var orderMatch = orderRegex.firstMatch(text);
     if (orderMatch != null) orderNo = orderMatch.group(2) ?? "0001";
 
-    // Heuristic Line Parsing
     List<String> lines = text.split('\n');
     for (var line in lines) {
       if (RegExp(r'\d+\.\d{2}$').hasMatch(line) && !line.toLowerCase().contains("total")) {
@@ -363,54 +403,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   // =========================================================
-  // MARK: - CAPTURE WIDGET TO IMAGE
-  // =========================================================
-  
-  Future<void> _captureAndPrint() async {
-    try {
-      setState(() => _isPrinting = true);
-      
-      // Allow UI to build off-screen if needed, though we used Dialog above
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      // We need to ensure the widget is in the tree. 
-      // Since we closed the dialog, we can't capture it anymore unless we re-render it invisibly
-      // or capture it BEFORE closing dialog.
-      // NOTE: For simplicity in this flow, I assumed user clicked 'Print' while Dialog was open.
-      // Ideally, capture happens inside the Dialog's 'onPressed'.
-      // But since we popped the dialog, let's re-render it offscreen or assume user logic captures it.
-      
-      // ** FIX: ** The logic above in _convertAndPrint pops dialog THEN calls _captureAndPrint.
-      // This will fail because _globalKey is no longer in tree.
-      // TO FIX THIS: We must capture bytes inside the dialog, save to file, THEN pop and print.
-      
-      // However, to keep code clean, I will assume we modify the Dialog logic above slightly:
-      // (I updated the dialog logic above to call capture logic differently? No wait.)
-      
-      // Let's implement the "Invisible Render" fix here for robustness:
-      // Actually, standard practice: Capture BEFORE pop.
-      // But since I cannot change the build method of Dialog easily here without complex state...
-      
-      // Let's assume the user accepted the dialog. We will rely on the "Preview" file flow.
-      // *Wait*, I will actually re-implement the flow correctly in the button:
-      // 1. Press Print -> Capture -> Save File -> Pop -> Print.
-      
-      // Since I can't easily change the Dialog code block in previous method without re-writing it entirely,
-      // I will assume you fix the button handler in the dialog to:
-      // onPressed: () async { await _captureToTemp(); Navigator.pop(ctx); _doPrint(); }
-      
-      // Since I am writing the full file, I will fix the Dialog Button logic in `_convertAndPrint` above.
-      // (Logic fixed in the _convertAndPrint method above? No, I need to write a helper).
-      
-      // Let's make a helper that captures the key *while it is visible*.
-      // I will modify `_convertAndPrint`'s button action in the full code below.
-      
-    } catch (e) {
-      // Error handling
-    }
-  }
-
-  // =========================================================
   // MARK: - PRINTING LOGIC
   // =========================================================
 
@@ -429,7 +421,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       
       // 1. Get Settings
       String targetMac = widget.connectedMac ?? prefs.getString('selected_printer_mac') ?? "";
-      int savedWidth = prefs.getInt('printer_width_dots') ?? 0;
+      
+      // FIX: Get the width saved by WidthSettings page
+      int savedWidth = prefs.getInt('printer_width_dots') ?? WIDTH_58MM; 
       
       // 2. Connect to Bluetooth
       await _connectBluetooth(targetMac);
@@ -438,23 +432,15 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         throw Exception("Printer not found or disconnected");
       }
 
-      // 3. Determine Width
-      int targetWidth = savedWidth > 0 ? savedWidth : WIDTH_58MM;
-      String devName = _connectedDevice!.platformName.toUpperCase();
-      if (devName.contains("80") || devName.contains("T80")) {
-        targetWidth = WIDTH_80MM;
-      }
-
-      // 4. Capture Root Isolate Token (CRITICAL FIX)
-      RootIsolateToken? rootToken = RootIsolateToken.instance;
-
-      // 5. Process PDF -> ESC/POS Bytes (Heavy Lifting)
-      // Check if it is PDF or Image (if we converted to receipt, it is likely an image now)
+      // 3. Process PDF/Image -> ESC/POS Bytes
       bool isPdf = _localFile!.path.toLowerCase().endsWith('.pdf');
+
+      // 4. Capture Root Isolate Token
+      RootIsolateToken? rootToken = RootIsolateToken.instance;
 
       List<int> dataToSend = await compute(_processPdfToEscPos, {
         'fileBytes': await _localFile!.readAsBytes(),
-        'width': targetWidth,
+        'width': savedWidth, // Use the saved width (384 or 576)
         'init': INIT_PRINTER,
         'feed': FEED_PAPER,
         'cut': CUT_PAPER,
@@ -462,7 +448,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         'rootToken': rootToken, 
       });
 
-      // 6. Send Bytes
+      // 5. Send Bytes
       await _sendToPrinter(dataToSend);
 
       if (mounted) _showSnackBar(lang.translate('msg_added_queue'));
@@ -575,6 +561,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       img.Image? trimmed = _trimImage(src);
       if (trimmed == null) continue; 
 
+      // Resize to the Target Width from Settings
       img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
 
       List<int> escBytes = _convertImageToEscPos(resized);
@@ -600,7 +587,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
 
-        // Check Alpha (Transparency -> White)
         if (p.a < 128) {
           grayPlane[y * width + x] = 255;
           continue;
@@ -610,12 +596,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         double g = p.g.toDouble();
         double b = p.b.toDouble();
         
-        // Contrast
         double rC = (r * 1.2 - 20).clamp(0, 255);
         double gC = (g * 1.2 - 20).clamp(0, 255);
         double bC = (b * 1.2 - 20).clamp(0, 255);
         
-        // Luminance
         int gray = (0.299 * rC + 0.587 * gC + 0.114 * bC).toInt();
         grayPlane[y * width + x] = gray;
       }
@@ -667,7 +651,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         for (int bit = 0; bit < 8; bit++) {
           int x = xByte * 8 + bit;
           if (x < width) {
-            // If black (0), set bit
             if (grayPlane[y * width + x] == 0) {
               byteValue |= (1 << (7 - bit));
             }
@@ -694,7 +677,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
         
-        // Check Alpha
         if (p.a < 128) continue; 
 
         if (p.r < threshold || p.g < threshold || p.b < threshold) {
@@ -709,7 +691,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     if (!foundContent) return null;
 
-    // Padding = 1
     minX = math.max(0, minX - 1);
     maxX = math.min(width, maxX + 1);
     minY = math.max(0, minY - 1);
@@ -738,11 +719,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       appBar: AppBar(
         title: Text(lang.translate('title_preview')),
         actions: [
-          // NEW: Convert to Receipt Button
           IconButton(
             icon: _isConverting
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : const Icon(Icons.receipt_long), // Receipt Icon
+              : const Icon(Icons.receipt_long), 
             tooltip: "Convert A4 to Receipt",
             onPressed: (_isLoading || _isConverting) ? null : _convertAndPrint,
           ),
@@ -850,7 +830,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 }
 
 // =========================================================
-// 3. ODOO RECEIPT LAYOUT WIDGET (IOS COMPATIBLE)
+// 3. ODOO RECEIPT LAYOUT WIDGET
 // =========================================================
 class OdooReceiptLayout extends StatelessWidget {
   final ReceiptData data;
@@ -859,8 +839,6 @@ class OdooReceiptLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. ACCESS LANGUAGE SERVICE
-    // This listens to changes. If language switches, this widget rebuilds.
     final lang = Provider.of<LanguageService>(context);
 
     const styleNormal = TextStyle(color: Colors.black, fontSize: 10, fontFamily: 'Roboto', decoration: TextDecoration.none);
@@ -880,7 +858,6 @@ class OdooReceiptLayout extends StatelessWidget {
         Text(data.address, style: styleNormal, textAlign: TextAlign.center),
         
         const SizedBox(height: 10),
-        // TRANSLATED: Scan QR Code...
         Text(lang.translate('rcpt_scan_qr'), style: styleBold),
         const SizedBox(height: 5),
         
@@ -901,7 +878,6 @@ class OdooReceiptLayout extends StatelessWidget {
         // Order Info
         Row(children: [
            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-             // TRANSLATED: Order No and Date
              Text("${lang.translate('rcpt_order_no')} ${data.orderNo}", style: styleNormal),
              Text("${lang.translate('rcpt_date')} ${data.date}", style: styleNormal),
            ])
@@ -917,7 +893,6 @@ class OdooReceiptLayout extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // TRANSLATED: Timeline details
               Text(lang.translate('rcpt_timeline_title'), style: styleBold),
               Text(lang.translate('rcpt_start_date'), style: styleNormal),
               Text(lang.translate('rcpt_last_date'), style: styleNormal),
@@ -930,7 +905,6 @@ class OdooReceiptLayout extends StatelessWidget {
         // Order Lines Header
         const Divider(color: Colors.black, thickness: 1),
         Row(children: [
-          // TRANSLATED: Columns
           Expanded(flex: 3, child: Text(lang.translate('rcpt_col_product'), style: styleNormal)),
           Expanded(flex: 2, child: Text(lang.translate('rcpt_col_price'), style: styleNormal, textAlign: TextAlign.right)),
           Expanded(flex: 1, child: Text(lang.translate('rcpt_col_qty'), style: styleNormal, textAlign: TextAlign.center)),
@@ -954,26 +928,22 @@ class OdooReceiptLayout extends StatelessWidget {
 
         // Totals
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          // TRANSLATED: Subtotal
           Text(lang.translate('rcpt_subtotal'), style: styleBold),
           Text(currency.format(data.subTotal), style: styleBold),
         ]),
         if (data.tax > 0)
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          // TRANSLATED: Tax
           Text(lang.translate('rcpt_tax'), style: styleNormal),
           Text(currency.format(data.tax), style: styleNormal),
         ]),
         
         const SizedBox(height: 5),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          // TRANSLATED: TOTAL
           Text(lang.translate('rcpt_total_caps'), style: styleHeader),
           Text(currency.format(data.total), style: styleHeader),
         ]),
 
         const SizedBox(height: 20),
-        // TRANSLATED: Thank you
         Text(lang.translate('rcpt_thank_you'), style: styleNormal),
         const SizedBox(height: 20),
       ],
