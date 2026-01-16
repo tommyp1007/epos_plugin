@@ -22,6 +22,7 @@ import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart
 import 'package:intl/intl.dart';
 import 'package:barcode_widget/barcode_widget.dart' as bw; 
 
+// --- ASSUMED EXTERNAL SERVICES (Adjust paths as needed) ---
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
 
@@ -67,6 +68,9 @@ class ReceiptData {
   });
 }
 
+// ==========================================
+// 2. MAIN VIEWER PAGE
+// ==========================================
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
   final PrinterService printerService;
@@ -263,58 +267,58 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
               height: 600,
               child: Column(
                 children: [
-                   Container(
-                     padding: const EdgeInsets.all(16),
-                     color: Colors.blueAccent,
-                     width: double.infinity,
-                     child: const Text("Generated Receipt Preview", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                   ),
-                   Expanded(
-                     child: SingleChildScrollView(
-                       child: RepaintBoundary(
-                         key: _globalKey, 
-                         child: Material(
-                           // FIX: White background ensures thermal printer doesn't print black box
-                           color: Colors.white, 
-                           child: Container(
-                             color: Colors.white,
-                             padding: const EdgeInsets.all(10),
-                             child: OdooReceiptLayout(data: data),
-                           ),
-                         ),
-                       ),
-                     ),
-                   ),
-                   Padding(
-                     padding: const EdgeInsets.all(8.0),
-                     child: Row(
-                       mainAxisAlignment: MainAxisAlignment.end,
-                       children: [
-                         TextButton(
-                           onPressed: () => Navigator.pop(ctx), 
-                           child: const Text("Cancel")
-                         ),
-                         const SizedBox(width: 10),
-                         ElevatedButton.icon(
-                           icon: const Icon(Icons.print),
-                           label: const Text("Print This"),
-                           onPressed: () async {
-                             // FIX: Capture -> Close -> Print Sequence
-                             bool success = await _captureAndSaveReceipt();
-                             if (success && mounted) {
-                               Navigator.pop(ctx);
-                               // Slight delay to ensure Dialog disposal doesn't lag the print
-                               Future.delayed(const Duration(milliseconds: 300), () {
-                                 _doPrint(); 
-                               });
-                             } else {
-                               _showSnackBar("Failed to capture receipt image.", isError: true);
-                             }
-                           },
-                         ),
-                       ],
-                     ),
-                   )
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      color: Colors.blueAccent,
+                      width: double.infinity,
+                      child: const Text("Generated Receipt Preview", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: RepaintBoundary(
+                          key: _globalKey, 
+                          child: Material(
+                            // FIX: White background ensures thermal printer doesn't print black box
+                            color: Colors.white, 
+                            child: Container(
+                              color: Colors.white,
+                              padding: const EdgeInsets.all(10),
+                              child: OdooReceiptLayout(data: data),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx), 
+                            child: const Text("Cancel")
+                          ),
+                          const SizedBox(width: 10),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.print),
+                            label: const Text("Print This"),
+                            onPressed: () async {
+                              // FIX: Capture -> Close -> Print Sequence
+                              bool success = await _captureAndSaveReceipt();
+                              if (success && mounted) {
+                                Navigator.pop(ctx);
+                                // Slight delay to ensure Dialog disposal doesn't lag the print
+                                Future.delayed(const Duration(milliseconds: 300), () {
+                                  _doPrint(); 
+                                });
+                              } else {
+                                _showSnackBar("Failed to capture receipt image.", isError: true);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    )
                 ],
               ),
             ),
@@ -442,7 +446,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       int savedWidth = prefs.getInt('printer_width_dots') ?? WIDTH_58MM; 
       
       if (targetMac.isEmpty) {
-         throw Exception(lang.translate('msg_disconnected'));
+          throw Exception(lang.translate('msg_disconnected'));
       }
 
       // 2. Connect to Bluetooth (Fixed Logic)
