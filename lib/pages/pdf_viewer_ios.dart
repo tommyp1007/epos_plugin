@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart'; // For compute
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +19,50 @@ import 'package:pdf/widgets.dart' as pw;
 // Services
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
+
+// --- BACKGROUND ISOLATE DATA CLASSES ---
+class ProcessingTask {
+  final Uint8List rawBytes;
+  final int printerWidth;
+  ProcessingTask(this.rawBytes, this.printerWidth);
+}
+
+class ProcessedResult {
+  final Uint8List displayBytes; // PNG for screen
+  final List<int> printBytes;   // ESC/POS for printer
+  ProcessedResult(this.displayBytes, this.printBytes);
+}
+
+// --- HEAVY PROCESSING FUNCTION (Runs in Background) ---
+Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
+  final img.Image? decoded = img.decodeImage(task.rawBytes);
+  if (decoded == null) throw Exception("Failed to decode image");
+
+  // 1. FIX: Flatten Transparent Pixels to White
+  // (Prevents transparent PDF backgrounds from turning into black bars)
+  img.Image flatImage = PrintUtils.flattenToWhite(decoded);
+
+  // 2. Trim WhiteSpace (Top/Bottom) to ensure seamless joining
+  img.Image? trimmed = PrintUtils.trimWhiteSpace(flatImage);
+  trimmed ??= flatImage; // If page is empty/cannot trim, use original flattened
+
+  // 3. Prepare Display Image (High Quality PNG for UI)
+  final Uint8List displayBytes = Uint8List.fromList(img.encodePng(trimmed));
+
+  // 4. Resize for Printer (Width Adjustment)
+  img.Image printerVer = img.copyResize(
+    trimmed, 
+    width: task.printerWidth, 
+    interpolation: img.Interpolation.cubic
+  );
+
+  // 5. Convert to ESC/POS
+  List<int> escPosData = PrintUtils.convertBitmapToEscPos(printerVer);
+
+  return ProcessedResult(displayBytes, escPosData);
+}
+
+// -------------------------------------------------------
 
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
@@ -38,20 +83,21 @@ class PdfViewerPage extends StatefulWidget {
 }
 
 class _PdfViewerPageState extends State<PdfViewerPage> {
-  // State for UI Preview
-  Uint8List? _docBytes;
-  bool _isLoadingDoc = true;
+  // State for UI
+  bool _isLoading = true;
+  bool _isProcessingPages = false;
   String _errorMessage = '';
+   
+  // Zoom Controller
+  final TransformationController _transformController = TransformationController();
 
-  // State for Thermal Printing
-  bool _isProcessingPrintData = true; // Processing ESC/POS in background
-  bool _isPrinting = false; // Sending data to printer
-  List<List<int>> _readyToPrintBytes = []; 
-  
-  // SAFETY LIMIT: Prevent more than 5 jobs in memory
+  // Data Containers
+  List<Uint8List> _previewImages = []; // For Screen
+  List<List<int>> _readyToPrintChunks = []; // For Printer
+   
+  // Printing State
+  bool _isPrinting = false;
   static const int _maxQueueSize = 5;
-
-  // Defaults to 384 (58mm) to match WidthSettings default, but will be overwritten by prefs
   int _printerWidth = 384; 
 
   @override
@@ -60,28 +106,21 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     _loadSettingsAndProcessFile();
   }
 
+  @override
+  void dispose() {
+    _transformController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadSettingsAndProcessFile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
-      // 1. SYNC WITH WidthSettings PAGE
-      // We read 'printer_width_dots'. 
       int? savedWidth = prefs.getInt('printer_width_dots');
-      
-      if (savedWidth != null && savedWidth > 0) {
-        _printerWidth = savedWidth;
-        debugPrint("Loaded Printer Width from Settings: $_printerWidth dots");
-      } else {
-        _printerWidth = 384; 
-        debugPrint("No settings found. Using default: $_printerWidth dots");
-      }
-
-      // 2. Prepare the document
+      _printerWidth = (savedWidth != null && savedWidth > 0) ? savedWidth : 384;
+       
       await _prepareDocument();
-      
     } catch (e) {
       debugPrint("Error loading settings: $e");
-      // Proceed with defaults if settings fail
       await _prepareDocument();
     }
   }
@@ -92,13 +131,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     File fileToProcess;
 
     try {
-      // 1. Download or Resolve File
       if (cleanPath.toLowerCase().startsWith('http')) {
         fileToProcess = await _downloadFile(cleanPath);
       } else {
-        if (cleanPath.startsWith('file://')) {
-          cleanPath = cleanPath.substring(7);
-        }
+        if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
         fileToProcess = File(cleanPath);
         
@@ -109,85 +145,54 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       final String ext = fileToProcess.path.split('.').last.toLowerCase();
       Uint8List rawBytes = await fileToProcess.readAsBytes();
+      bool isPdf = ext == 'pdf' || fileToProcess.path.endsWith('pdf');
+
+      // Clear previous data
+      _previewImages.clear();
+      _readyToPrintChunks.clear();
       
-      // 2. Prepare Bytes for PDF Previewer
-      if (ext == 'pdf' || fileToProcess.path.endsWith('pdf')) {
-         _docBytes = rawBytes;
-      } else {
-         // If image, wrap in PDF so the Viewer can handle zoom/scroll
-         final image = pw.MemoryImage(rawBytes);
-         final pdf = pw.Document();
-         pdf.addPage(pw.Page(
-           build: (pw.Context context) {
-             return pw.Center(child: pw.Image(image));
-           }
-         ));
-         _docBytes = await pdf.save();
-      }
+      if (mounted) setState(() { _isLoading = false; _isProcessingPages = true; });
 
-      // 3. Show Preview Immediately
-      if (mounted) {
-        setState(() => _isLoadingDoc = false);
-      }
-
-      // 4. Start Processing for Thermal Printer (Background)
-      _generateThermalPrintData(rawBytes, ext == 'pdf');
-
-    } catch (e) {
-       if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoadingDoc = false; });
-    }
-  }
-
-  // --- Processing for Printer Commands ---
-  Future<void> _generateThermalPrintData(Uint8List sourceBytes, bool isPdf) async {
-    try {
-      List<img.Image> rawImages = [];
-
+      // --- START PROCESSING ---
+      
       if (isPdf) {
-         // Rasterize at high DPI for Thermal Printer Clarity (Matches CoreGraphics scale)
-         await for (var page in Printing.raster(sourceBytes, dpi: 300)) {
-           final pngBytes = await page.toPng();
-           final decoded = img.decodeImage(pngBytes);
-           if (decoded != null) rawImages.add(decoded);
-         }
+        // Rasterize PDF pages one by one
+        await for (var page in Printing.raster(rawBytes, dpi: 300)) {
+          if (!mounted) break;
+          
+          final pngBytes = await page.toPng();
+          
+          // Offload heavy work to background isolate
+          final ProcessedResult result = await compute(
+            _heavyImageProcessing, 
+            ProcessingTask(pngBytes, _printerWidth)
+          );
+
+          setState(() {
+            _previewImages.add(result.displayBytes);
+            _readyToPrintChunks.add(result.printBytes);
+          });
+        }
       } else {
-         final decoded = img.decodeImage(sourceBytes);
-         if (decoded != null) rawImages.add(decoded);
-      }
-
-      if (rawImages.isEmpty) throw Exception("Empty Document");
-
-      _readyToPrintBytes.clear();
-
-      // Convert each page to ESC/POS
-      for (var image in rawImages) {
-        // A. Smart Crop (Remove whitespace) - Updated to match Swift's tighter trim
-        img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
-        if (trimmed == null) continue; // Skip blank pages
-
-        // B. Resize to Printer Width (Cubic for quality)
-        img.Image resized = img.copyResize(
-          trimmed, 
-          width: _printerWidth, 
-          interpolation: img.Interpolation.cubic
+        // Single Image
+        final ProcessedResult result = await compute(
+            _heavyImageProcessing, 
+            ProcessingTask(rawBytes, _printerWidth)
         );
-
-        // C. Dither & Convert
-        List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
-        _readyToPrintBytes.add(escPosData);
+        
+        setState(() {
+           _previewImages.add(result.displayBytes);
+           _readyToPrintChunks.add(result.printBytes);
+        });
       }
 
-      // 5. Enable Print Button
       if (mounted) {
-        setState(() {
-          _isProcessingPrintData = false;
-        });
+        setState(() => _isProcessingPages = false);
         if (widget.autoPrint) _doPrint();
       }
 
     } catch (e) {
-      debugPrint("Error generating print data: $e");
-      if(mounted) setState(() => _isProcessingPrintData = false);
+       if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoading = false; _isProcessingPages = false; });
     }
   }
 
@@ -206,10 +211,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   Future<bool> _ensureConnected() async {
-    // 1. Check if already connected via Service
     if (await widget.printerService.isConnected()) return true;
-
-    // 2. If not, try to reconnect using saved Mac
     final prefs = await SharedPreferences.getInstance();
     final savedMac = prefs.getString('selected_printer_mac'); 
     
@@ -231,7 +233,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       return;
     }
 
-    if (_readyToPrintBytes.isEmpty) {
+    if (_isProcessingPages || _readyToPrintChunks.isEmpty) {
        _showSnackBar("Preparing print data... please wait.", isError: false);
        return;
     }
@@ -249,22 +251,19 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
 
       // Construct ESC/POS Commands
-      // Ported logic: Aggregate all pages into one command to match Swift's seamless stitching
       List<int> bytesToPrint = [];
       bytesToPrint += [0x1B, 0x40]; // Init
       bytesToPrint += [27, 97, 1]; // Center align
       
-      for (var processedBytes in _readyToPrintBytes) {
+      // Combine all chunks seamlessly (No cuts or feeds in between)
+      for (var processedBytes in _readyToPrintChunks) {
         bytesToPrint += processedBytes;
-        // REMOVED: bytesToPrint += [10]; 
-        // We do NOT add a line feed between pages to ensure seamless stitching (like Swift)
       }
       
-      // Footer Commands (Only after all pages are sent)
+      // Footer Commands (Feed & Cut ONLY at the very end)
       bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
       bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
-      // --- SENDING TO PRINTER SERVICE ---
       await widget.printerService.sendBytes(bytesToPrint);
 
       if (mounted) {
@@ -292,6 +291,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   @override
   Widget build(BuildContext context) {
     final lang = Provider.of<LanguageService>(context);
+    final Size screenSize = MediaQuery.of(context).size;
 
     int pendingCount = widget.printerService.pendingJobs;
     bool isQueueFull = pendingCount >= _maxQueueSize;
@@ -313,28 +313,53 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       backgroundColor: Colors.grey[200],
       body: Stack(
         children: [
-          // 1. THE PDF VIEWER (Background Layer)
-          if (_isLoadingDoc)
+          // 1. CONTENT LAYER (Zoomable)
+          if (_isLoading)
             const Center(child: CircularProgressIndicator())
-          else if (_docBytes != null)
-             PdfPreview(
-               build: (format) => _docBytes!,
-               useActions: false, 
-               canChangeOrientation: false,
-               canChangePageFormat: false,
-               canDebug: false,
-               scrollViewDecoration: BoxDecoration(color: Colors.grey[200]),
-               maxPageWidth: 700, 
-             )
+          else if (_errorMessage.isNotEmpty)
+            Center(child: Text(_errorMessage, style: const TextStyle(color: Colors.red)))
           else
-            Center(child: Text(_errorMessage, style: const TextStyle(color: Colors.red))),
+            InteractiveViewer(
+              transformationController: _transformController,
+              minScale: 0.5,
+              maxScale: 4.0,
+              boundaryMargin: const EdgeInsets.all(20),
+              panEnabled: true,
+              child: SizedBox(
+                width: screenSize.width,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 20),
+                      if (_previewImages.isEmpty && !_isProcessingPages)
+                          const Center(child: Text("No content found")),
+                      
+                      // Render all pages
+                      ..._previewImages.map((bytes) => Container(
+                        // VISUAL PREVIEW: Keep slight margin for UI, but actual print is seamless
+                        margin: const EdgeInsets.only(bottom: 5, left: 16, right: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8, spreadRadius: 2)]
+                        ),
+                        child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
+                      )).toList(),
+
+                      if (_isProcessingPages)
+                        const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()),
+                      
+                      const SizedBox(height: 80), // Space for button
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // 2. STATUS BAR (Top Overlay)
           if (pendingCount > 0)
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
+              top: 0, left: 0, right: 0,
               child: Container(
                 width: double.infinity,
                 color: Colors.orange.withOpacity(0.9),
@@ -350,34 +375,35 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
             ),
 
           // 3. PRINT BUTTON (Bottom Overlay)
-          if (!_isLoadingDoc)
+          if (!_isLoading)
             Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
+              bottom: 0, left: 0, right: 0,
               child: Container(
                 padding: const EdgeInsets.all(16),
-                color: Colors.white,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, -2))]
+                ),
                 child: SafeArea(
                   top: false,
                   child: SizedBox(
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton.icon(
-                      icon: (_isPrinting || _isProcessingPrintData)
+                      icon: (_isPrinting || _isProcessingPages)
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Icon(Icons.print),
                       label: Text(
                           isQueueFull 
                             ? lang.translate('btn_wait') 
-                            : (_isProcessingPrintData 
+                            : (_isProcessingPages 
                                 ? "ANALYZING..." 
                                 : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: (isQueueFull || _isProcessingPrintData) ? Colors.grey : Colors.blueAccent
+                        backgroundColor: (isQueueFull || _isProcessingPages) ? Colors.grey : Colors.blueAccent
                       ),
-                      onPressed: (_isPrinting || isQueueFull || _isProcessingPrintData) ? null : _doPrint,
+                      onPressed: (_isPrinting || isQueueFull || _isProcessingPages) ? null : _doPrint,
                     ),
                   ),
                 ),
@@ -393,6 +419,27 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 class PrintUtils {
   static int clamp(int value) => value.clamp(0, 255);
 
+  /// NEW: Fixes black backgrounds caused by transparency in PDFs.
+  /// Creates a white canvas and draws the source image onto it.
+  static img.Image flattenToWhite(img.Image source) {
+    // If no alpha, return original
+    if (!source.hasAlpha) return source;
+
+    // Create a white background image of the same size
+    img.Image whiteBg = img.Image(
+      width: source.width, 
+      height: source.height, 
+      numChannels: 3, // RGB only, no Alpha
+    );
+    
+    // Fill with White (255, 255, 255)
+    // FIX: Replaced undefined 'clear' with 'fill'
+    img.fill(whiteBg, color: img.ColorRgb8(255, 255, 255));
+
+    // Composite the source image (with alpha) onto the white background
+    return img.compositeImage(whiteBg, source);
+  }
+
   /// Ported from Swift: Tighter trimming logic to ensure seamless stitching
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
@@ -407,6 +454,7 @@ class PrintUtils {
     for (int y = 0; y < height; y++) {
       int darkPixelsInRow = 0;
       for (int x = 0; x < width; x++) {
+        // Luminance check is safe now because we flattened the image to white first
         if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
           darkPixelsInRow++;
         }
@@ -430,12 +478,11 @@ class PrintUtils {
     if (!foundContent) return null;
 
     // Swift Port: "Minimized padding to ensure seamless stitching"
-    // Changed padding from 5 to 1, and removed the extra bottom buffer (+40)
     const int padding = 1; 
     minX = math.max(0, minX - padding);
     maxX = math.min(width, maxX + padding);
     minY = math.max(0, minY - padding);
-    maxY = math.min(height, maxY + padding); // Removed +40 buffer
+    maxY = math.min(height, maxY + padding);
 
     return img.copyCrop(source, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
   }
