@@ -40,21 +40,22 @@ Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
   if (decoded == null) throw Exception("Failed to decode image");
 
   // 1. FIX: Flatten Transparent Pixels to White
-  // (Prevents transparent PDF backgrounds from turning into black bars)
   img.Image flatImage = PrintUtils.flattenToWhite(decoded);
 
   // 2. Prepare Display Image (Use Full Untrimmed Image for UI Preview)
-  // This ensures the screen preview looks exactly like the PDF page.
   final Uint8List displayBytes = Uint8List.fromList(img.encodePng(flatImage));
 
-  // 3. Trim WhiteSpace (Top/Bottom) ONLY for Printer
-  // (Ensures seamless joining on thermal paper)
+  // 3. Trim WhiteSpace (Top/Bottom/Left/Right)
+  // This is the critical step to ensure we only print the receipt content
   img.Image? trimmed = PrintUtils.trimWhiteSpace(flatImage);
-  trimmed ??= flatImage; // If page is empty/cannot trim, use original flattened
+  
+  // If trimming failed (empty page) or wasn't needed, use original
+  img.Image imageToPrint = trimmed ?? flatImage;
 
   // 4. Resize for Printer (Width Adjustment)
+  // maintainAspectRatio is true by default in copyResize when height is null
   img.Image printerVer = img.copyResize(
-    trimmed, 
+    imageToPrint, 
     width: task.printerWidth, 
     interpolation: img.Interpolation.cubic
   );
@@ -120,7 +121,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       final prefs = await SharedPreferences.getInstance();
       int? savedWidth = prefs.getInt('printer_width_dots');
       _printerWidth = (savedWidth != null && savedWidth > 0) ? savedWidth : 384;
-       
+        
       await _prepareDocument();
     } catch (e) {
       debugPrint("Error loading settings: $e");
@@ -140,7 +141,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
         fileToProcess = File(cleanPath);
-         
+          
         if (!await fileToProcess.exists()) {
           throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
         }
@@ -165,6 +166,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       if (isPdf) {
         // STEP 1: Fast Preview Loop
         // Rasterize and show raw images immediately so user doesn't wait
+        // Increased DPI to 300 to ensure small text is captured clearly
         await for (var page in Printing.raster(rawBytes, dpi: 300)) {
           if (!mounted) break;
           
@@ -248,7 +250,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
 
     if (_isProcessingPages || _readyToPrintChunks.isEmpty) {
-       // Use "Working..." as a placeholder for preparing
        _showSnackBar("${lang.translate('working')}...", isError: false);
        return;
     }
@@ -270,12 +271,12 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       bytesToPrint += [0x1B, 0x40]; // Init
       bytesToPrint += [27, 97, 1]; // Center align
       
-      // Combine all chunks seamlessly (No cuts or feeds in between)
+      // Combine all chunks seamlessly
       for (var processedBytes in _readyToPrintChunks) {
         bytesToPrint += processedBytes;
       }
       
-      // Footer Commands (Feed & Cut ONLY at the very end)
+      // Footer Commands (Feed & Cut)
       bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
       bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
@@ -313,7 +314,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     return Scaffold(
       appBar: AppBar(
-        // FIXED: Key updated to 'title_preview' based on provided translations
         title: Text(lang.translate('title_preview')),
         actions: [
           if (pendingCount > 0)
@@ -329,7 +329,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       backgroundColor: Colors.grey[200],
       body: Stack(
         children: [
-          // 1. CONTENT LAYER (Zoomable)
+          // 1. CONTENT LAYER
           if (_isLoading)
             const Center(child: CircularProgressIndicator())
           else if (_errorMessage.isNotEmpty)
@@ -349,12 +349,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                     children: [
                       const SizedBox(height: 20),
                       if (_previewImages.isEmpty && !_isProcessingPages)
-                          // UPDATED: Use 'err_decode' (Could not decode content) as closest match
                           Center(child: Text(lang.translate('err_decode'))),
                         
                       // Render all pages
                       ..._previewImages.map((bytes) => Container(
-                        // VISUAL PREVIEW: Keep slight margin for UI, but actual print is seamless
                         margin: const EdgeInsets.only(bottom: 5, left: 16, right: 16),
                         decoration: BoxDecoration(
                           color: Colors.white,
@@ -366,14 +364,14 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                       if (_isProcessingPages)
                         const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()),
                       
-                      const SizedBox(height: 80), // Space for button
+                      const SizedBox(height: 80),
                     ],
                   ),
                 ),
               ),
             ),
 
-          // 2. STATUS BAR (Top Overlay)
+          // 2. STATUS BAR
           if (pendingCount > 0)
             Positioned(
               top: 0, left: 0, right: 0,
@@ -391,7 +389,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
               ),
             ),
 
-          // 3. PRINT BUTTON (Bottom Overlay)
+          // 3. PRINT BUTTON
           if (!_isLoading)
             Positioned(
               bottom: 0, left: 0, right: 0,
@@ -414,7 +412,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                           isQueueFull 
                             ? lang.translate('btn_wait') 
                             : (_isProcessingPages 
-                                // UPDATED: "ANALYZING..." replaced with 'working' key
                                 ? lang.translate('working') 
                                 : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
                       ),
@@ -437,71 +434,94 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 class PrintUtils {
   static int clamp(int value) => value.clamp(0, 255);
 
-  /// NEW: Fixes black backgrounds caused by transparency in PDFs.
-  /// Creates a white canvas and draws the source image onto it.
+  /// Fixes black backgrounds caused by transparency in PDFs.
   static img.Image flattenToWhite(img.Image source) {
-    // If no alpha, return original
     if (!source.hasAlpha) return source;
-
-    // Create a white background image of the same size
     img.Image whiteBg = img.Image(
       width: source.width, 
       height: source.height, 
-      numChannels: 3, // RGB only, no Alpha
+      numChannels: 3, 
     );
-    
-    // Fill with White (255, 255, 255)
     img.fill(whiteBg, color: img.ColorRgb8(255, 255, 255));
-
-    // Composite the source image (with alpha) onto the white background
     return img.compositeImage(whiteBg, source);
   }
 
-  /// Ported from Swift: Tighter trimming logic to ensure seamless stitching
+  /// UPDATED: Smarter Trimming Logic
+  /// This now aggressively removes white space from ALL sides (Top/Bottom/Left/Right)
+  /// ensuring the receipt is cropped to its exact content before resizing.
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
     int height = source.height;
-    int minX = width, maxX = 0, minY = height, maxY = 0;
-    bool foundContent = false;
-    
-    // Swift uses 240 as threshold
-    const int darknessThreshold = 240; 
-    const int minDarkPixelsPerRow = 2; 
 
+    // 1. SETTINGS
+    // Lower threshold (200) prevents light gray noise from being seen as content.
+    // Higher pixel count (10) prevents dust/speckles from preventing the crop.
+    const int darknessThreshold = 200; 
+    const int minDarkPixels = 10; 
+
+    int minY = -1;
+    int maxY = -1;
+
+    // 2. SCAN VERTICALLY (Find Top and Bottom Content)
     for (int y = 0; y < height; y++) {
       int darkPixelsInRow = 0;
       for (int x = 0; x < width; x++) {
-        // Luminance check is safe now because we flattened the image to white first
         if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
           darkPixelsInRow++;
         }
       }
       
-      if (darkPixelsInRow >= minDarkPixelsPerRow) {
-        foundContent = true;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-        
-        // Scan X boundaries only on rows with content
-        for (int x = 0; x < width; x++) {
-          if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-          }
-        }
+      if (darkPixelsInRow >= minDarkPixels) {
+        if (minY == -1) minY = y;
+        maxY = y;
       }
     }
 
-    if (!foundContent) return null;
+    // If page is blank, return null (original will be used)
+    if (minY == -1 || maxY == -1) return null;
 
-    // Swift Port: "Minimized padding to ensure seamless stitching"
-    const int padding = 1; 
+    // 3. SCAN HORIZONTALLY (Find Left and Right Content)
+    // We ONLY scan within the MinY and MaxY we just found.
+    // This ignores headers/footers outside the receipt area.
+    int minX = width;
+    int maxX = 0;
+
+    for (int x = 0; x < width; x++) {
+      int darkPixelsInCol = 0;
+      // Loop only through the content rows
+      for (int y = minY; y <= maxY; y++) {
+         if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
+           darkPixelsInCol++;
+         }
+      }
+      
+      if (darkPixelsInCol >= 1) { // Even 1 dark pixel in the vertical column counts as content
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+
+    // Safety check if something went wrong with X detection
+    if (minX >= maxX) {
+      minX = 0; 
+      maxX = width;
+    }
+
+    // 4. ADD PADDING
+    const int padding = 10; 
     minX = math.max(0, minX - padding);
     maxX = math.min(width, maxX + padding);
     minY = math.max(0, minY - padding);
     maxY = math.min(height, maxY + padding);
 
-    return img.copyCrop(source, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
+    // 5. CROP
+    return img.copyCrop(
+      source, 
+      x: minX, 
+      y: minY, 
+      width: maxX - minX, 
+      height: maxY - minY
+    );
   }
 
   static List<int> convertBitmapToEscPos(img.Image srcImage) {
@@ -511,7 +531,7 @@ class PrintUtils {
     
     List<int> grayPlane = List.filled(width * height, 0);
 
-    // 1. Grayscale & Contrast (Matches Swift: r * 1.2 - 20)
+    // 1. Grayscale & Contrast 
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = srcImage.getPixel(x, y);
@@ -564,8 +584,6 @@ class PrintUtils {
         for (int bit = 0; bit < 8; bit++) {
           int x = xByte * 8 + bit;
           if (x < width) {
-            // Check based on dithered value (0 is black, 255 is white)
-            // ESC/POS expects 1 for black (dot printed), 0 for white
             if (grayPlane[y * width + x] == 0) {
               byteValue |= (1 << (7 - bit));
             }
