@@ -2,75 +2,23 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui; // Required for Image capture
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'; // For RepaintBoundary
-import 'package:flutter/services.dart'; // Required for RootIsolateToken
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+
+// Image & PDF Processing
+import 'package:image/image.dart' as img;
 import 'package:printing/printing.dart';
-import 'package:image/image.dart' as img; 
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
-// ML Kit & Formatting
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
-import 'package:intl/intl.dart';
-import 'package:barcode_widget/barcode_widget.dart' as bw; 
-
-// --- ASSUMED EXTERNAL SERVICES (Adjust paths as needed) ---
+// Services
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
 
-// ==========================================
-// 1. DATA MODELS
-// ==========================================
-class ReceiptItem {
-  final String productName;
-  final double unitPrice;
-  final int qty;
-  final double totalPrice;
-
-  ReceiptItem(this.productName, this.unitPrice, this.qty, this.totalPrice);
-}
-
-class ReceiptData {
-  String companyName;
-  String companyReg;
-  String address;
-  String orderNo;
-  String receiptNo;
-  String date;
-  String barcodePayload;
-  List<ReceiptItem> items;
-  double subTotal;
-  double tax;
-  double rounding;
-  double total;
-
-  ReceiptData({
-    this.companyName = "My Company Sdn Bhd",
-    this.companyReg = "",
-    this.address = "",
-    this.orderNo = "",
-    this.receiptNo = "",
-    this.date = "",
-    this.barcodePayload = "",
-    this.items = const [],
-    this.subTotal = 0.0,
-    this.tax = 0.0,
-    this.rounding = 0.0,
-    this.total = 0.0,
-  });
-}
-
-// ==========================================
-// 2. MAIN VIEWER PAGE
-// ==========================================
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
   final PrinterService printerService;
@@ -90,112 +38,161 @@ class PdfViewerPage extends StatefulWidget {
 }
 
 class _PdfViewerPageState extends State<PdfViewerPage> {
-  // Configuration
-  final int WIDTH_58MM = 384;
-  final int WIDTH_80MM = 576;
-  final List<int> INIT_PRINTER = [0x1B, 0x40];
-  final List<int> FEED_PAPER = [0x1B, 0x64, 0x04];
-  final List<int> CUT_PAPER = [0x1D, 0x56, 0x42, 0x00];
-
-  bool _isLoading = true;
-  bool _isPrinting = false;
-  bool _isConverting = false;
+  // State for UI Preview
+  Uint8List? _docBytes;
+  bool _isLoadingDoc = true;
   String _errorMessage = '';
 
-  List<Uint8List> _previewBytes = [];
-  File? _localFile;
+  // State for Thermal Printing
+  bool _isProcessingPrintData = true; // Processing ESC/POS in background
+  bool _isPrinting = false; // Sending data to printer
+  List<List<int>> _readyToPrintBytes = []; 
+  
+  // SAFETY LIMIT: Prevent more than 5 jobs in memory
+  static const int _maxQueueSize = 5;
 
-  final TransformationController _transformController = TransformationController();
-  final GlobalKey _globalKey = GlobalKey(); 
-
-  // Bluetooth State
-  BluetoothDevice? _connectedDevice;
-  BluetoothCharacteristic? _writeCharacteristic;
+  // Defaults to 384 (58mm) to match WidthSettings default, but will be overwritten by prefs
+  int _printerWidth = 384; 
 
   @override
   void initState() {
     super.initState();
-    _loadAndGeneratePreview();
+    _loadSettingsAndProcessFile();
   }
 
-  @override
-  void dispose() {
-    _transformController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadAndGeneratePreview() async {
+  Future<void> _loadSettingsAndProcessFile() async {
     try {
-      if (mounted) setState(() => _isLoading = true);
-      await _prepareFile();
-    } catch (e) {
-      if (mounted) {
-        final lang = Provider.of<LanguageService>(context, listen: false);
-        setState(() {
-          _errorMessage = "${lang.translate('msg_error_prefix')} $e";
-          _isLoading = false;
-        });
+      final prefs = await SharedPreferences.getInstance();
+      
+      // 1. SYNC WITH WidthSettings PAGE
+      // We read 'printer_width_dots'. 
+      int? savedWidth = prefs.getInt('printer_width_dots');
+      
+      if (savedWidth != null && savedWidth > 0) {
+        _printerWidth = savedWidth;
+        debugPrint("Loaded Printer Width from Settings: $_printerWidth dots");
+      } else {
+        _printerWidth = 384; 
+        debugPrint("No settings found. Using default: $_printerWidth dots");
       }
-    }
-  }
 
-  Future<File> _copyFileSecurely(String sourcePath) async {
-    final File sourceFile = File(sourcePath);
-    final Directory tempDir = await getTemporaryDirectory();
-    final String fileName = sourcePath.split('/').last.replaceAll(RegExp(r'[^\w\.-]'), '_');
-    final String safePath = '${tempDir.path}/$fileName';
-    final File destFile = File(safePath);
-
-    try {
-      if (await destFile.exists()) await destFile.delete();
-      return await sourceFile.copy(safePath);
+      // 2. Prepare the document
+      await _prepareDocument();
+      
     } catch (e) {
-      final IOSink sink = destFile.openWrite();
-      await sourceFile.openRead().pipe(sink);
-      return destFile;
+      debugPrint("Error loading settings: $e");
+      // Proceed with defaults if settings fail
+      await _prepareDocument();
     }
   }
 
-  Future<void> _prepareFile() async {
+  Future<void> _prepareDocument() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     String cleanPath = widget.filePath;
+    File fileToProcess;
 
     try {
+      // 1. Download or Resolve File
       if (cleanPath.toLowerCase().startsWith('http')) {
-        _localFile = await _downloadFile(cleanPath);
+        fileToProcess = await _downloadFile(cleanPath);
       } else {
-        try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) { debugPrint("URI Decode Error: $e"); }
-        if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
-        _localFile = await _copyFileSecurely(cleanPath);
+        if (cleanPath.startsWith('file://')) {
+          cleanPath = cleanPath.substring(7);
+        }
+        try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
+        fileToProcess = File(cleanPath);
+        
+        if (!await fileToProcess.exists()) {
+          throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
+        }
       }
 
-      final String ext = _localFile!.path.split('.').last.toLowerCase();
-      bool isPdf = ext == 'pdf' || _localFile!.path.endsWith('pdf');
+      final String ext = fileToProcess.path.split('.').last.toLowerCase();
+      Uint8List rawBytes = await fileToProcess.readAsBytes();
+      
+      // 2. Prepare Bytes for PDF Previewer
+      if (ext == 'pdf' || fileToProcess.path.endsWith('pdf')) {
+         _docBytes = rawBytes;
+      } else {
+         // If image, wrap in PDF so the Viewer can handle zoom/scroll
+         final image = pw.MemoryImage(rawBytes);
+         final pdf = pw.Document();
+         pdf.addPage(pw.Page(
+           build: (pw.Context context) {
+             return pw.Center(child: pw.Image(image));
+           }
+         ));
+         _docBytes = await pdf.save();
+      }
 
-      _previewBytes.clear();
+      // 3. Show Preview Immediately
+      if (mounted) {
+        setState(() => _isLoadingDoc = false);
+      }
+
+      // 4. Start Processing for Thermal Printer (Background)
+      _generateThermalPrintData(rawBytes, ext == 'pdf');
+
+    } catch (e) {
+       if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoadingDoc = false; });
+    }
+  }
+
+  // --- Processing for Printer Commands ---
+  Future<void> _generateThermalPrintData(Uint8List sourceBytes, bool isPdf) async {
+    try {
+      List<img.Image> rawImages = [];
 
       if (isPdf) {
-        final pdfBytes = await _localFile!.readAsBytes();
-        await for (var page in Printing.raster(pdfBytes, dpi: 150)) {
-          final pngBytes = await page.toPng();
-          if (mounted) setState(() => _previewBytes.add(pngBytes));
-        }
+         // Rasterize at high DPI for Thermal Printer Clarity (Matches CoreGraphics scale)
+         await for (var page in Printing.raster(sourceBytes, dpi: 300)) {
+           final pngBytes = await page.toPng();
+           final decoded = img.decodeImage(pngBytes);
+           if (decoded != null) rawImages.add(decoded);
+         }
       } else {
-        final bytes = await _localFile!.readAsBytes();
-        if (mounted) setState(() => _previewBytes.add(bytes));
+         final decoded = img.decodeImage(sourceBytes);
+         if (decoded != null) rawImages.add(decoded);
       }
 
+      if (rawImages.isEmpty) throw Exception("Empty Document");
+
+      _readyToPrintBytes.clear();
+
+      // Convert each page to ESC/POS
+      for (var image in rawImages) {
+        // A. Smart Crop (Remove whitespace) - Updated to match Swift's tighter trim
+        img.Image? trimmed = PrintUtils.trimWhiteSpace(image);
+        if (trimmed == null) continue; // Skip blank pages
+
+        // B. Resize to Printer Width (Cubic for quality)
+        img.Image resized = img.copyResize(
+          trimmed, 
+          width: _printerWidth, 
+          interpolation: img.Interpolation.cubic
+        );
+
+        // C. Dither & Convert
+        List<int> escPosData = PrintUtils.convertBitmapToEscPos(resized);
+        _readyToPrintBytes.add(escPosData);
+      }
+
+      // 5. Enable Print Button
       if (mounted) {
-        setState(() => _isLoading = false);
-        if (widget.autoPrint) Future.delayed(const Duration(milliseconds: 500), _convertAndPrint);
+        setState(() {
+          _isProcessingPrintData = false;
+        });
+        if (widget.autoPrint) _doPrint();
       }
 
     } catch (e) {
-      if(mounted) setState(() { _errorMessage = "${lang.translate('msg_error_prefix')} $e"; _isLoading = false; });
+      debugPrint("Error generating print data: $e");
+      if(mounted) setState(() => _isProcessingPrintData = false);
     }
   }
 
   Future<File> _downloadFile(String url) async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
     final http.Response response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       final Directory tempDir = await getTemporaryDirectory();
@@ -204,556 +201,90 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       await file.writeAsBytes(response.bodyBytes);
       return file;
     } else {
-      throw Exception("Download Failed: ${response.statusCode}");
+      throw Exception("${lang.translate('err_download')} ${response.statusCode}");
     }
   }
 
-  // =========================================================
-  // MARK: - OCR & PARSING LOGIC
-  // =========================================================
+  Future<bool> _ensureConnected() async {
+    // 1. Check if already connected via Service
+    if (await widget.printerService.isConnected()) return true;
 
-  Future<void> _convertAndPrint() async {
-    if (_previewBytes.isEmpty) return;
-    setState(() => _isConverting = true);
-
-    try {
-      // 1. Initialize Parsers
-      final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-      final barcodeScanner = BarcodeScanner();
-      
-      StringBuffer fullText = StringBuffer();
-      String? foundQrCode;
-
-      final Directory tempDir = await getTemporaryDirectory();
-
-      // 2. Scan every page
-      for (int i = 0; i < _previewBytes.length; i++) {
-        final tempFile = File('${tempDir.path}/ocr_page_$i.png');
-        await tempFile.writeAsBytes(_previewBytes[i]);
-        final inputImage = InputImage.fromFilePath(tempFile.path);
-
-        // Scan Text
-        final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
-        fullText.writeln(recognizedText.text);
-
-        // Scan Barcode
-        if (foundQrCode == null) {
-          final barcodes = await barcodeScanner.processImage(inputImage);
-          for (Barcode barcode in barcodes) {
-            if (barcode.rawValue != null) {
-              foundQrCode = barcode.rawValue;
-              break;
-            }
-          }
-        }
-        await tempFile.delete();
-      }
-
-      // 3. Parse Data
-      ReceiptData data = _parseTextToReceiptData(fullText.toString(), foundQrCode);
-
-      textRecognizer.close();
-      barcodeScanner.close();
-
-      // 4. Show Dialog with Capture Logic
-      if (mounted) {
-        await showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            contentPadding: EdgeInsets.zero,
-            content: SizedBox(
-              width: 400,
-              height: 600,
-              child: Column(
-                children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      color: Colors.blueAccent,
-                      width: double.infinity,
-                      child: const Text("Generated Receipt Preview", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: RepaintBoundary(
-                          key: _globalKey, 
-                          child: Material(
-                            // FIX: White background ensures thermal printer doesn't print black box
-                            color: Colors.white, 
-                            child: Container(
-                              color: Colors.white,
-                              padding: const EdgeInsets.all(10),
-                              child: OdooReceiptLayout(data: data),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx), 
-                            child: const Text("Cancel")
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton.icon(
-                            icon: const Icon(Icons.print),
-                            label: const Text("Print This"),
-                            onPressed: () async {
-                              // FIX: Capture -> Close -> Print Sequence
-                              bool success = await _captureAndSaveReceipt();
-                              if (success && mounted) {
-                                Navigator.pop(ctx);
-                                // Slight delay to ensure Dialog disposal doesn't lag the print
-                                Future.delayed(const Duration(milliseconds: 300), () {
-                                  _doPrint(); 
-                                });
-                              } else {
-                                _showSnackBar("Failed to capture receipt image.", isError: true);
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                    )
-                ],
-              ),
-            ),
-          )
-        );
-      }
-
-    } catch (e) {
-      _showSnackBar("OCR Failed: $e", isError: true);
-    } finally {
-      if(mounted) setState(() => _isConverting = false);
-    }
-  }
-
-  /// Captures the RepaintBoundary to a File and updates _localFile
-  Future<bool> _captureAndSaveReceipt() async {
-    try {
-      // Small delay to ensure frame is painted
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      RenderRepaintBoundary? boundary = _globalKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      
-      if (boundary == null) {
-        debugPrint("Boundary not found");
-        return false;
-      }
-
-      // Capture image (pixelRatio 2.0 is good for 58mm/80mm)
-      ui.Image image = await boundary.toImage(pixelRatio: 2.0); 
-      ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      
-      if (byteData != null) {
-        Uint8List pngBytes = byteData.buffer.asUint8List();
-        
-        final Directory tempDir = await getTemporaryDirectory();
-        final String tempPath = '${tempDir.path}/generated_receipt_${DateTime.now().millisecondsSinceEpoch}.png';
-        final File file = File(tempPath);
-        await file.writeAsBytes(pngBytes);
-
-        if (mounted) {
-          setState(() {
-            _localFile = file; // Switch current file to this new image
-            _previewBytes = [pngBytes]; // Update preview
-          });
-        }
-        return true;
-      }
-      return false;
-    } catch (e) {
-      debugPrint("Capture Error: $e");
-      return false;
-    }
-  }
-
-  ReceiptData _parseTextToReceiptData(String text, String? qrCode) {
-    String company = "My Company Sdn Bhd"; 
-    String orderNo = "Unknown";
-    String date = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
-    double total = 0.0;
-    List<ReceiptItem> items = [];
-
-    // Simple RegEx parsing logic
-    final RegExp totalRegex = RegExp(r'(Total|Grand Total|Amount)[\s\:\$RM]*([\d\.,]+)', caseSensitive: false);
-    final RegExp orderRegex = RegExp(r'(Order|Ref|Inv)[\s\:\.]*([A-Za-z0-9\-]+)', caseSensitive: false);
+    // 2. If not, try to reconnect using saved Mac
+    final prefs = await SharedPreferences.getInstance();
+    final savedMac = prefs.getString('selected_printer_mac'); 
     
-    var totalMatch = totalRegex.firstMatch(text);
-    if (totalMatch != null) {
-      String cleanTotal = totalMatch.group(2)!.replaceAll(',', '');
-      total = double.tryParse(cleanTotal) ?? 0.0;
+    if (savedMac != null && savedMac.isNotEmpty) {
+       try { 
+         return await widget.printerService.connect(savedMac); 
+       } catch (e) { 
+         return false; 
+       }
     }
-
-    var orderMatch = orderRegex.firstMatch(text);
-    if (orderMatch != null) orderNo = orderMatch.group(2) ?? "0001";
-
-    List<String> lines = text.split('\n');
-    for (var line in lines) {
-      // Basic line item heuristic: Ends with a number like 12.00
-      if (RegExp(r'\d+\.\d{2}$').hasMatch(line) && !line.toLowerCase().contains("total")) {
-        List<String> parts = line.split(RegExp(r'\s+'));
-        if (parts.length > 1) {
-          String priceStr = parts.last.replaceAll(',', '');
-          double price = double.tryParse(priceStr) ?? 0.0;
-          String name = parts.sublist(0, parts.length - 1).join(" ");
-          items.add(ReceiptItem(name, price, 1, price));
-        }
-      }
-    }
-
-    if (items.isEmpty && total > 0) {
-      items.add(ReceiptItem("Consolidated Item", total, 1, total));
-    }
-
-    return ReceiptData(
-      companyName: company,
-      orderNo: orderNo,
-      date: date,
-      barcodePayload: qrCode ?? "https://lhdn.gov.my/einvoice",
-      items: items,
-      total: total,
-      subTotal: total, 
-    );
+    return false;
   }
-
-  // =========================================================
-  // MARK: - PRINTING LOGIC
-  // =========================================================
 
   Future<void> _doPrint() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
     
-    // Safety check
-    if (_localFile == null || !await _localFile!.exists()) {
-      _showSnackBar("No receipt file to print.", isError: true);
+    if (widget.printerService.pendingJobs >= _maxQueueSize) {
+      _showSnackBar(lang.translate('msg_queue_full_wait'), isError: true);
       return;
+    }
+
+    if (_readyToPrintBytes.isEmpty) {
+       _showSnackBar("Preparing print data... please wait.", isError: false);
+       return;
     }
 
     setState(() => _isPrinting = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
-      
-      // 1. Get Settings
-      String targetMac = widget.connectedMac ?? prefs.getString('selected_printer_mac') ?? "";
-      int savedWidth = prefs.getInt('printer_width_dots') ?? WIDTH_58MM; 
-      
-      if (targetMac.isEmpty) {
-          throw Exception(lang.translate('msg_disconnected'));
+      bool isConnected = await _ensureConnected();
+      if (!isConnected) {
+        if (mounted) {
+          _showSnackBar(lang.translate('msg_disconnected'), isError: true);
+          setState(() => _isPrinting = false);
+        }
+        return;
       }
 
-      // 2. Connect to Bluetooth (Fixed Logic)
-      await _connectBluetooth(targetMac);
-
-      if (_connectedDevice == null || _writeCharacteristic == null) {
-        throw Exception("Printer connection failed.");
+      // Construct ESC/POS Commands
+      // Ported logic: Aggregate all pages into one command to match Swift's seamless stitching
+      List<int> bytesToPrint = [];
+      bytesToPrint += [0x1B, 0x40]; // Init
+      bytesToPrint += [27, 97, 1]; // Center align
+      
+      for (var processedBytes in _readyToPrintBytes) {
+        bytesToPrint += processedBytes;
+        // REMOVED: bytesToPrint += [10]; 
+        // We do NOT add a line feed between pages to ensure seamless stitching (like Swift)
       }
+      
+      // Footer Commands (Only after all pages are sent)
+      bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
+      bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
-      // 3. Process Image -> ESC/POS Bytes
-      bool isPdf = _localFile!.path.toLowerCase().endsWith('.pdf');
-      RootIsolateToken? rootToken = RootIsolateToken.instance;
+      // --- SENDING TO PRINTER SERVICE ---
+      await widget.printerService.sendBytes(bytesToPrint);
 
-      List<int> dataToSend = await compute(_processPdfToEscPos, {
-        'fileBytes': await _localFile!.readAsBytes(),
-        'width': savedWidth, 
-        'init': INIT_PRINTER,
-        'feed': FEED_PAPER,
-        'cut': CUT_PAPER,
-        'isPdf': isPdf,
-        'rootToken': rootToken, 
-      });
-
-      // 4. Send Bytes
-      await _sendToPrinter(dataToSend);
-
-      if (mounted) _showSnackBar(lang.translate('msg_added_queue'));
-
+      if (mounted) {
+        _showSnackBar("${lang.translate('msg_added_queue')} (${widget.printerService.pendingJobs} pending)");
+      }
     } catch (e) {
       if (mounted) _showSnackBar("${lang.translate('msg_error_prefix')} $e", isError: true);
     } finally {
+      await Future.delayed(const Duration(milliseconds: 300));
       if (mounted) setState(() => _isPrinting = false);
     }
-  }
-
-  Future<void> _connectBluetooth(String targetMac) async {
-    // A. Check if already connected
-    if (_connectedDevice != null && _connectedDevice!.isConnected) {
-      return; // Already ready
-    }
-
-    // B. Scan for device (Non-blocking)
-    debugPrint("Scanning for $targetMac...");
-    
-    StreamSubscription? scanSubscription;
-    Completer<BluetoothDevice?> deviceCompleter = Completer();
-
-    try {
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-      
-      scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-        for (ScanResult r in results) {
-          if (r.device.remoteId.str == targetMac) {
-             if (!deviceCompleter.isCompleted) deviceCompleter.complete(r.device);
-             FlutterBluePlus.stopScan(); 
-             break;
-          }
-        }
-      });
-
-      // Wait for scan to finish or device found
-      BluetoothDevice? device = await deviceCompleter.future.timeout(
-        const Duration(seconds: 4), 
-        onTimeout: () => null
-      );
-
-      scanSubscription.cancel();
-
-      if (device == null) {
-        // If not found in scan, try creating instance directly (works on some OS)
-        device = BluetoothDevice.fromId(targetMac);
-      }
-
-      // C. Connect
-      if (device != null) {
-        await device.connect(autoConnect: false);
-        _connectedDevice = device;
-        
-        // Discover services to find write char
-        List<BluetoothService> services = await _connectedDevice!.discoverServices();
-        for (var service in services) {
-          for (var char in service.characteristics) {
-            if (char.properties.write || char.properties.writeWithoutResponse) {
-              _writeCharacteristic = char;
-              debugPrint("Write characteristic found: ${char.uuid}");
-              return;
-            }
-          }
-        }
-      }
-
-    } catch (e) {
-      debugPrint("Bluetooth Error: $e");
-      scanSubscription?.cancel();
-    }
-  }
-
-  Future<void> _sendToPrinter(List<int> data) async {
-    if (_writeCharacteristic == null) return;
-    
-    // Chunking to prevent buffer overflow (Adjusted for safety)
-    const int chunkSize = 150; 
-    
-    for (int i = 0; i < data.length; i += chunkSize) {
-      int end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
-      List<int> chunk = data.sublist(i, end);
-      
-      // Use writeWithoutResponse for speed, but catch errors
-      try {
-        await _writeCharacteristic!.write(chunk, withoutResponse: true);
-        // Important: Give printer time to digest data
-        await Future.delayed(const Duration(milliseconds: 30)); 
-      } catch (e) {
-        debugPrint("Write failed: $e");
-      }
-    }
-  }
-
-  // =========================================================
-  // MARK: - IMAGE PROCESSING
-  // =========================================================
-
-  static Future<List<int>> _processPdfToEscPos(Map<String, dynamic> params) async {
-    RootIsolateToken? rootToken = params['rootToken'];
-    if (rootToken != null) {
-      BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
-    }
-
-    Uint8List fileBytes = params['fileBytes'];
-    int targetWidth = params['width'];
-    List<int> initCmd = params['init'];
-    List<int> feedCmd = params['feed'];
-    List<int> cutCmd = params['cut'];
-    bool isPdf = params['isPdf'];
-
-    List<int> dataToSend = [];
-    
-    dataToSend.addAll(initCmd);
-    dataToSend.addAll([0x1B, 0x61, 0x01]); // Align Center
-
-    List<img.Image> rawImages = [];
-
-    try {
-      if (isPdf) {
-        await for (var page in Printing.raster(fileBytes, dpi: 200)) {
-          final png = await page.toPng();
-          final image = img.decodePng(png);
-          if (image != null) rawImages.add(image);
-        }
-      } else {
-        // Robust image decoding
-        final image = img.decodeImage(fileBytes);
-        if (image != null) rawImages.add(image);
-      }
-
-      int count = math.min(rawImages.length, 50);
-
-      for (int i = 0; i < count; i++) {
-        img.Image src = rawImages[i];
-
-        // Trim whitespace
-        img.Image? trimmed = _trimImage(src);
-        if (trimmed == null) continue; 
-
-        // Resize
-        img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
-
-        // Convert to Bits
-        List<int> escBytes = _convertImageToEscPos(resized);
-        dataToSend.addAll(escBytes);
-      }
-    } catch (e) {
-      debugPrint("Processing Error in Isolate: $e");
-    }
-
-    dataToSend.addAll(feedCmd);
-    dataToSend.addAll(cutCmd);
-
-    return dataToSend;
-  }
-
-  static List<int> _convertImageToEscPos(img.Image src) {
-    int width = src.width;
-    int height = src.height;
-    List<int> grayPlane = List.filled(width * height, 255);
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        img.Pixel p = src.getPixel(x, y);
-
-        // FIX: Handle Alpha. If transparent, treat as white (255)
-        if (p.a < 128) {
-          grayPlane[y * width + x] = 255;
-          continue;
-        }
-
-        double r = p.r.toDouble();
-        double g = p.g.toDouble();
-        double b = p.b.toDouble();
-        
-        // Boost contrast
-        double rC = (r * 1.2 - 20).clamp(0, 255);
-        double gC = (g * 1.2 - 20).clamp(0, 255);
-        double bC = (b * 1.2 - 20).clamp(0, 255);
-        
-        int gray = (0.299 * rC + 0.587 * gC + 0.114 * bC).toInt();
-        grayPlane[y * width + x] = gray;
-      }
-    }
-
-    // Floyd-Steinberg Dither
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        int i = y * width + x;
-        int oldPixel = grayPlane[i];
-        int newPixel = oldPixel < 128 ? 0 : 255;
-        grayPlane[i] = newPixel;
-        
-        int error = oldPixel - newPixel;
-        
-        if (x + 1 < width) {
-          int idx = i + 1;
-          grayPlane[idx] = (grayPlane[idx] + error * 7 / 16).toInt().clamp(0, 255);
-        }
-        if (y + 1 < height) {
-           if (x - 1 >= 0) {
-             int idx = i + width - 1;
-             grayPlane[idx] = (grayPlane[idx] + error * 3 / 16).toInt().clamp(0, 255);
-           }
-           int idxB = i + width;
-           grayPlane[idxB] = (grayPlane[idxB] + error * 5 / 16).toInt().clamp(0, 255);
-           if (x + 1 < width) {
-             int idxC = i + width + 1;
-             grayPlane[idxC] = (grayPlane[idxC] + error * 1 / 16).toInt().clamp(0, 255);
-           }
-        }
-      }
-    }
-
-    // Pack Bits for GS v 0
-    List<int> escPosData = [];
-    int widthBytes = (width + 7) ~/ 8;
-    
-    escPosData.addAll([0x1D, 0x76, 0x30, 0x00]);
-    escPosData.add(widthBytes % 256);
-    escPosData.add(widthBytes ~/ 256);
-    escPosData.add(height % 256);
-    escPosData.add(height ~/ 256);
-
-    for (int y = 0; y < height; y++) {
-      for (int xByte = 0; xByte < widthBytes; xByte++) {
-        int byteValue = 0;
-        for (int bit = 0; bit < 8; bit++) {
-          int x = xByte * 8 + bit;
-          if (x < width) {
-            if (grayPlane[y * width + x] == 0) {
-              byteValue |= (1 << (7 - bit));
-            }
-          }
-        }
-        escPosData.add(byteValue);
-      }
-    }
-    return escPosData;
-  }
-
-  static img.Image? _trimImage(img.Image src) {
-    int width = src.width;
-    int height = src.height;
-    int minX = width;
-    int maxX = 0;
-    int minY = height;
-    int maxY = 0;
-    bool foundContent = false;
-    int threshold = 240;
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        img.Pixel p = src.getPixel(x, y);
-        if (p.a < 128) continue; 
-        if (p.r < threshold || p.g < threshold || p.b < threshold) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-          foundContent = true;
-        }
-      }
-    }
-
-    if (!foundContent) return null;
-
-    minX = math.max(0, minX - 1);
-    maxX = math.min(width, maxX + 1);
-    minY = math.max(0, minY - 1);
-    maxY = math.min(height, maxY + 1);
-
-    return img.copyCrop(src, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message), 
         backgroundColor: isError ? Colors.red : Colors.green,
-        duration: const Duration(seconds: 2),
+        duration: const Duration(seconds: 1),
       )
     );
   }
@@ -761,240 +292,224 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   @override
   Widget build(BuildContext context) {
     final lang = Provider.of<LanguageService>(context);
-    final Size screenSize = MediaQuery.of(context).size;
+
+    int pendingCount = widget.printerService.pendingJobs;
+    bool isQueueFull = pendingCount >= _maxQueueSize;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(lang.translate('title_preview')),
+        title: Text(lang.translate('preview_title')),
         actions: [
-          IconButton(
-            icon: _isConverting
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : const Icon(Icons.receipt_long), 
-            tooltip: "Convert A4 to Receipt",
-            onPressed: (_isLoading || _isConverting) ? null : _convertAndPrint,
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : _loadAndGeneratePreview,
-          )
+          if (pendingCount > 0)
+            Center(child: Padding(
+              padding: const EdgeInsets.only(right: 15),
+              child: Text(
+                "${lang.translate('lbl_queue')}: $pendingCount", 
+                style: const TextStyle(fontWeight: FontWeight.bold)
+              ),
+            ))
         ],
       ),
-      backgroundColor: Colors.grey[300],
-      body: _isLoading
-        ? Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const CircularProgressIndicator(),
-                if (_errorMessage.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: Text(_errorMessage, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
-                  )
-                ]
-              ],
-            ),
-          )
-        : Column(
-            children: [
-              Expanded(
-                child: InteractiveViewer(
-                  transformationController: _transformController,
-                  panEnabled: true,
-                  boundaryMargin: const EdgeInsets.symmetric(vertical: 80, horizontal: 20),
-                  minScale: 0.5,
-                  maxScale: 4.0,
-                  constrained: false,
-                  child: SizedBox(
-                    width: screenSize.width,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(height: 20),
-                        if (_previewBytes.isEmpty)
-                           Padding(
-                             padding: const EdgeInsets.all(20.0),
-                             child: Text(lang.translate('err_decode')),
-                           )
-                        else
-                           ..._previewBytes.map((bytes) => Container(
-                            margin: const EdgeInsets.only(bottom: 2, left: 16, right: 16), 
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.15),
-                                  blurRadius: 10,
-                                  spreadRadius: 2,
-                                  offset: const Offset(0, 4)
-                                )
-                              ]
-                            ),
-                            child: Image.memory(
-                              bytes,
-                              fit: BoxFit.contain,
-                              gaplessPlayback: true,
-                              filterQuality: FilterQuality.high,
-                            ),
-                          )).toList(),
-                        const SizedBox(height: 100),
-                      ],
-                    ),
-                  ),
+      backgroundColor: Colors.grey[200],
+      body: Stack(
+        children: [
+          // 1. THE PDF VIEWER (Background Layer)
+          if (_isLoadingDoc)
+            const Center(child: CircularProgressIndicator())
+          else if (_docBytes != null)
+             PdfPreview(
+               build: (format) => _docBytes!,
+               useActions: false, 
+               canChangeOrientation: false,
+               canChangePageFormat: false,
+               canDebug: false,
+               scrollViewDecoration: BoxDecoration(color: Colors.grey[200]),
+               maxPageWidth: 700, 
+             )
+          else
+            Center(child: Text(_errorMessage, style: const TextStyle(color: Colors.red))),
+
+          // 2. STATUS BAR (Top Overlay)
+          if (pendingCount > 0)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                width: double.infinity,
+                color: Colors.orange.withOpacity(0.9),
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  isQueueFull 
+                      ? lang.translate('status_queue_full')
+                      : "${lang.translate('status_printing')} ($pendingCount ${lang.translate('status_left')})", 
+                  textAlign: TextAlign.center, 
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
                 ),
               ),
+            ),
 
-              Container(
+          // 3. PRINT BUTTON (Bottom Overlay)
+          if (!_isLoadingDoc)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
                 padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, -2))]
-                ),
+                color: Colors.white,
                 child: SafeArea(
                   top: false,
                   child: SizedBox(
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton.icon(
-                      icon: _isPrinting
+                      icon: (_isPrinting || _isProcessingPrintData)
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Icon(Icons.print),
-                      label: Text(_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueAccent,
-                        elevation: 0,
+                      label: Text(
+                          isQueueFull 
+                            ? lang.translate('btn_wait') 
+                            : (_isProcessingPrintData 
+                                ? "ANALYZING..." 
+                                : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
                       ),
-                      onPressed: _isPrinting ? null : _doPrint,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: (isQueueFull || _isProcessingPrintData) ? Colors.grey : Colors.blueAccent
+                      ),
+                      onPressed: (_isPrinting || isQueueFull || _isProcessingPrintData) ? null : _doPrint,
                     ),
                   ),
                 ),
-              )
-            ],
-          ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-// =========================================================
-// 3. ODOO RECEIPT LAYOUT WIDGET
-// =========================================================
-class OdooReceiptLayout extends StatelessWidget {
-  final ReceiptData data;
+// --- UTILS FOR IMAGE PROCESSING ---
+class PrintUtils {
+  static int clamp(int value) => value.clamp(0, 255);
 
-  const OdooReceiptLayout({Key? key, required this.data}) : super(key: key);
+  /// Ported from Swift: Tighter trimming logic to ensure seamless stitching
+  static img.Image? trimWhiteSpace(img.Image source) {
+    int width = source.width;
+    int height = source.height;
+    int minX = width, maxX = 0, minY = height, maxY = 0;
+    bool foundContent = false;
+    
+    // Swift uses 240 as threshold
+    const int darknessThreshold = 240; 
+    const int minDarkPixelsPerRow = 2; 
 
-  @override
-  Widget build(BuildContext context) {
-    final lang = Provider.of<LanguageService>(context);
-
-    const styleNormal = TextStyle(color: Colors.black, fontSize: 10, fontFamily: 'Roboto', decoration: TextDecoration.none);
-    const styleBold = TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'Roboto', decoration: TextDecoration.none);
-    const styleHeader = TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold, fontFamily: 'Roboto', decoration: TextDecoration.none);
-
-    final currency = NumberFormat.currency(symbol: "RM ", decimalDigits: 2);
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        // Header
-        Text(data.companyName, style: styleHeader, textAlign: TextAlign.center),
-        if (data.companyReg.isNotEmpty) Text("(${data.companyReg})", style: styleNormal),
-        const SizedBox(height: 5),
-        Text(data.address, style: styleNormal, textAlign: TextAlign.center),
+    for (int y = 0; y < height; y++) {
+      int darkPixelsInRow = 0;
+      for (int x = 0; x < width; x++) {
+        if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
+          darkPixelsInRow++;
+        }
+      }
+      
+      if (darkPixelsInRow >= minDarkPixelsPerRow) {
+        foundContent = true;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
         
-        const SizedBox(height: 10),
-        Text(lang.translate('rcpt_scan_qr'), style: styleBold),
-        const SizedBox(height: 5),
-        
-        // QR Code
-        Container(
-          height: 120,
-          width: 120,
-          color: Colors.white,
-          child: bw.BarcodeWidget(
-             barcode: bw.Barcode.qrCode(),
-             data: data.barcodePayload,
-             drawText: false,
-          ),
-        ),
-        
-        const SizedBox(height: 10),
-        
-        // Order Info
-        Row(children: [
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text("${lang.translate('rcpt_order_no')} ${data.orderNo}", style: styleNormal),
-              Text("${lang.translate('rcpt_date')} ${data.date}", style: styleNormal),
-            ])
-        ]),
+        // Scan X boundaries only on rows with content
+        for (int x = 0; x < width; x++) {
+          if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+          }
+        }
+      }
+    }
 
-        const SizedBox(height: 5),
+    if (!foundContent) return null;
+
+    // Swift Port: "Minimized padding to ensure seamless stitching"
+    // Changed padding from 5 to 1, and removed the extra bottom buffer (+40)
+    const int padding = 1; 
+    minX = math.max(0, minX - padding);
+    maxX = math.min(width, maxX + padding);
+    minY = math.max(0, minY - padding);
+    maxY = math.min(height, maxY + padding); // Removed +40 buffer
+
+    return img.copyCrop(source, x: minX, y: minY, width: maxX - minX, height: maxY - minY);
+  }
+
+  static List<int> convertBitmapToEscPos(img.Image srcImage) {
+    int width = srcImage.width;
+    int height = srcImage.height;
+    int widthBytes = (width + 7) ~/ 8;
+    
+    List<int> grayPlane = List.filled(width * height, 0);
+
+    // 1. Grayscale & Contrast (Matches Swift: r * 1.2 - 20)
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        img.Pixel p = srcImage.getPixel(x, y);
         
-        // Request Timeline Box
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(border: Border.all(color: Colors.black, width: 0.5)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(lang.translate('rcpt_timeline_title'), style: styleBold),
-              Text(lang.translate('rcpt_start_date'), style: styleNormal),
-              Text(lang.translate('rcpt_last_date'), style: styleNormal),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 15),
-
-        // Order Lines Header
-        const Divider(color: Colors.black, thickness: 1),
-        Row(children: [
-          Expanded(flex: 3, child: Text(lang.translate('rcpt_col_product'), style: styleNormal)),
-          Expanded(flex: 2, child: Text(lang.translate('rcpt_col_price'), style: styleNormal, textAlign: TextAlign.right)),
-          Expanded(flex: 1, child: Text(lang.translate('rcpt_col_qty'), style: styleNormal, textAlign: TextAlign.center)),
-          Expanded(flex: 2, child: Text(lang.translate('rcpt_col_total'), style: styleNormal, textAlign: TextAlign.right)),
-        ]),
-        const Divider(color: Colors.black, thickness: 1),
+        int r = clamp((p.r * 1.2 - 20).toInt());
+        int g = clamp((p.g * 1.2 - 20).toInt());
+        int b = clamp((p.b * 1.2 - 20).toInt());
         
-        ...data.items.map((item) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-            Expanded(flex: 3, child: Text(item.productName, style: styleNormal)),
-            Expanded(flex: 2, child: Text(currency.format(item.unitPrice), style: styleNormal, textAlign: TextAlign.right)),
-            Expanded(flex: 1, child: Text("${item.qty}", style: styleNormal, textAlign: TextAlign.center)),
-            Expanded(flex: 2, child: Text(currency.format(item.totalPrice), style: styleNormal, textAlign: TextAlign.right)),
-          ]),
-        )),
+        grayPlane[y * width + x] = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
+      }
+    }
 
-        const Divider(color: Colors.black, thickness: 1),
-
-        // Totals
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(lang.translate('rcpt_subtotal'), style: styleBold),
-          Text(currency.format(data.subTotal), style: styleBold),
-        ]),
-        if (data.tax > 0)
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(lang.translate('rcpt_tax'), style: styleNormal),
-          Text(currency.format(data.tax), style: styleNormal),
-        ]),
+    // 2. Dither (Floyd-Steinberg)
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        int i = y * width + x;
+        int oldPixel = grayPlane[i];
+        int newPixel = oldPixel < 128 ? 0 : 255;
         
-        const SizedBox(height: 5),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(lang.translate('rcpt_total_caps'), style: styleHeader),
-          Text(currency.format(data.total), style: styleHeader),
-        ]),
+        grayPlane[i] = newPixel;
+        int error = oldPixel - newPixel;
 
-        const SizedBox(height: 20),
-        Text(lang.translate('rcpt_thank_you'), style: styleNormal),
-        const SizedBox(height: 20),
-      ],
-    );
+        if (x + 1 < width) {
+          int idx = i + 1;
+          grayPlane[idx] = clamp(grayPlane[idx] + (error * 7 ~/ 16));
+        }
+        
+        if (y + 1 < height) {
+          if (x - 1 >= 0) {
+            int idx = i + width - 1;
+            grayPlane[idx] = clamp(grayPlane[idx] + (error * 3 ~/ 16));
+          }
+          int idx = i + width;
+          grayPlane[idx] = clamp(grayPlane[idx] + (error * 5 ~/ 16));
+          
+          if (x + 1 < width) {
+              int idx = i + width + 1;
+              grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
+          }
+        }
+      }
+    }
+
+    // 3. Pack Bits (GS v 0)
+    List<int> cmd = [0x1D, 0x76, 0x30, 0x00, widthBytes % 256, widthBytes ~/ 256, height % 256, height ~/ 256];
+    
+    for (int y = 0; y < height; y++) {
+      for (int xByte = 0; xByte < widthBytes; xByte++) {
+        int byteValue = 0;
+        for (int bit = 0; bit < 8; bit++) {
+          int x = xByte * 8 + bit;
+          if (x < width) {
+            // Check based on dithered value (0 is black, 255 is white)
+            // ESC/POS expects 1 for black (dot printed), 0 for white
+            if (grayPlane[y * width + x] == 0) {
+              byteValue |= (1 << (7 - bit));
+            }
+          }
+        }
+        cmd.add(byteValue);
+      }
+    }
+    return cmd;
   }
 }
