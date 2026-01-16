@@ -22,7 +22,7 @@ class PrinterService: NSObject {
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
-    private var targetMacAddress: String = "" // In iOS, we usually match by Name or UUID, not Mac Address directly
+    private var targetMacAddress: String = "" 
     
     // State
     private var isPrinting = false
@@ -75,9 +75,6 @@ class PrinterService: NSObject {
         
         self.isPrinting = true
         
-        // In iOS, we can't search by MAC Address easily.
-        // We usually search by Name or connect to a known UUID.
-        // For cross-platform compatibility, we often look for the device name or just scan for writeable services.
         if let mac = macAddress {
             self.targetMacAddress = mac
         } else {
@@ -106,56 +103,61 @@ class PrinterService: NSObject {
             guard let self = self else { return }
             
             // 1. Determine Width
-            // Note: Flutter SharedPreferences adds "flutter." prefix to keys
             let savedWidth = UserDefaults.standard.integer(forKey: "flutter.printer_width_dots")
             var targetWidth = savedWidth > 0 ? savedWidth : self.WIDTH_58MM
             
-            // Check Bluetooth Device Name to guess width (heuristic) if generic
             if let name = self.connectedPeripheral?.name?.uppercased() {
                 if name.contains("80") || name.contains("T80") {
                     targetWidth = self.WIDTH_80MM
                 }
             }
             
-            // 2. Render PDF to Bitmap
+            // 2. Load PDF
             guard let document = CGPDFDocument(url as CFURL), document.numberOfPages > 0 else {
                 self.finishPrintJob(success: false, error: "Invalid PDF")
                 return
             }
             
-            let pageCount = min(document.numberOfPages, 20)
+            let pageCount = min(document.numberOfPages, 50) // Allow up to 50 pages for long receipts
             var dataToSend: [UInt8] = []
             
-            // Init Printer
+            // --- HEADER COMMANDS ---
+            // Init Printer & Align Center
             dataToSend.append(contentsOf: self.INIT_PRINTER)
+            dataToSend.append(contentsOf: [0x1B, 0x61, 0x01])
+            
+            // --- PAGE LOOP (AGGREGATION) ---
+            // We loop through all pages and append their data to 'dataToSend' ONE BY ONE.
+            // We do NOT send to printer inside this loop. This ensures continuous printing.
             
             for i in 1...pageCount {
                 guard let page = document.page(at: i) else { continue }
                 
-                // Render High Quality
                 let pageRect = page.getBoxRect(.mediaBox)
-                let scale = CGFloat(targetWidth) / pageRect.width
-                let targetHeight = Int(pageRect.height * scale)
                 
-                // Create Context
+                // High-Res Render (2.0x)
+                let renderScale: CGFloat = 2.0
+                let renderWidth = Int(pageRect.width * renderScale)
+                let renderHeight = Int(pageRect.height * renderScale)
+                
                 let colorSpace = CGColorSpaceCreateDeviceRGB()
                 let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
                 
                 guard let context = CGContext(data: nil,
-                                              width: targetWidth,
-                                              height: targetHeight,
+                                              width: renderWidth,
+                                              height: renderHeight,
                                               bitsPerComponent: 8,
                                               bytesPerRow: 0,
                                               space: colorSpace,
                                               bitmapInfo: bitmapInfo) else { continue }
                 
+                // 1. Fill White (Avoid black borders)
                 context.interpolationQuality = .high
                 context.setFillColor(UIColor.white.cgColor)
-                context.fill(CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+                context.fill(CGRect(x: 0, y: 0, width: renderWidth, height: renderHeight))
                 
                 context.saveGState()
-                context.scaleBy(x: scale, y: scale)
-                // PDF pages coordinate system is flipped in iOS
+                context.scaleBy(x: renderScale, y: renderScale)
                 context.translateBy(x: 0, y: pageRect.height)
                 context.scaleBy(x: 1.0, y: -1.0)
                 context.drawPDFPage(page)
@@ -164,25 +166,28 @@ class PrinterService: NSObject {
                 guard let cgImage = context.makeImage() else { continue }
                 let uiImage = UIImage(cgImage: cgImage)
                 
-                // 3. Trim Whitespace
-                guard let trimmedImage = uiImage.trim() else { continue }
+                // 2. Trim Whitespace (Seamless Stitching)
+                guard let trimmedImage = uiImage.trim() else {
+                    continue // Skip blank pages
+                }
                 
-                // 4. Resize to exact width if trim changed it (Optional, mostly for scaling back up)
+                // 3. Resize to Printer Width
                 let finalImage = trimmedImage.resize(to: targetWidth)
                 
-                // 5. Convert to ESC/POS (Dithered)
+                // 4. Convert to Bytes
                 let escPosData = self.convertImageToEscPos(image: finalImage)
-                dataToSend.append(contentsOf: escPosData)
                 
-                // Sleep slightly to prevent memory spike
-                usleep(10000)
+                // 5. Append to the Master List
+                dataToSend.append(contentsOf: escPosData)
             }
             
-            // Feed and Cut
+            // --- FOOTER COMMANDS ---
+            // Only feed and cut AFTER all pages are processed
             dataToSend.append(contentsOf: self.FEED_PAPER)
             dataToSend.append(contentsOf: self.CUT_PAPER)
             
-            // 6. Send to Bluetooth
+            // --- SEND TO PRINTER ---
+            // This sends the entire long receipt as one continuous stream
             self.sendToPrinter(data: dataToSend)
         }
     }
@@ -193,20 +198,17 @@ class PrinterService: NSObject {
             return
         }
         
-        // Chunking for BLE (Max ~180 bytes per packet usually safe, iOS handles queueing)
-        // Note: writeValue with .withoutResponse is faster but risky for large data. 
-        // We use .withResponse for reliability or careful chunking.
-        let chunkSize = 180 
+        // Chunk size 150 is safe for most Bluetooth Low Energy printers
+        let chunkSize = 150
         
         for i in stride(from: 0, to: data.count, by: chunkSize) {
             let end = min(i + chunkSize, data.count)
             let chunk = Data(data[i..<end])
             
-            // For thermal printing images, .withoutResponse is preferred for speed,
-            // but we must not flood the buffer.
             peripheral.writeValue(chunk, for: char, type: .withoutResponse)
             
-            // Small sleep to prevent buffer overflow on the printer side
+            // A small sleep is required to prevent overflowing the printer's buffer.
+            // If the printer stutters (stops/starts), try increasing this slightly (e.g., 25000).
             usleep(20000) // 20ms
         }
         
@@ -222,7 +224,6 @@ class PrinterService: NSObject {
                 let msg = self.getCurrentLanguage() == "ms" ? "Ralat: \(error ?? "")" : "Error: \(error ?? "")"
                 self.showNotification(message: msg)
             } else {
-                 // Check Queue
                 if !self.printQueue.isEmpty {
                     let nextUrl = self.printQueue.removeFirst()
                     self.printPdf(fileUrl: nextUrl)
@@ -231,21 +232,20 @@ class PrinterService: NSObject {
         }
     }
     
-    // MARK: - Image Processing Algorithms (Ported from Kotlin)
+    // MARK: - Image Processing Algorithms
     
     private func convertImageToEscPos(image: UIImage) -> [UInt8] {
         guard let inputCGImage = image.cgImage else { return [] }
         let width = inputCGImage.width
         let height = inputCGImage.height
         
-        // Get Pixel Data
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * width
         let bitsPerComponent = 8
         
-        // Buffer to hold pixels
-        var rawData = [UInt8](repeating: 0, count: height * width * 4)
+        // Initialize buffer with White (255)
+        var rawData = [UInt8](repeating: 255, count: height * width * 4)
         
         let context = CGContext(data: &rawData,
                                 width: width,
@@ -255,19 +255,19 @@ class PrinterService: NSObject {
                                 space: colorSpace,
                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
         
+        context?.setFillColor(UIColor.white.cgColor)
+        context?.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
         context?.draw(inputCGImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
         
-        // Convert to Grayscale & Dither (Floyd-Steinberg)
-        var grayPlane = [Int](repeating: 0, count: width * height)
+        var grayPlane = [Int](repeating: 255, count: width * height)
         
-        // 1. Grayscale & High Contrast
+        // Grayscale + Contrast
         for i in 0..<(width * height) {
             let offset = i * 4
             let r = Double(rawData[offset])
             let g = Double(rawData[offset + 1])
             let b = Double(rawData[offset + 2])
             
-            // High Contrast Formula (Scale 1.2, Offset -20) matched from Kotlin
             let rC = clamp(r * 1.2 - 20)
             let gC = clamp(g * 1.2 - 20)
             let bC = clamp(b * 1.2 - 20)
@@ -275,14 +275,13 @@ class PrinterService: NSObject {
             grayPlane[i] = Int(0.299 * rC + 0.587 * gC + 0.114 * bC)
         }
         
-        // 2. Dither
+        // Dither
         for y in 0..<height {
             for x in 0..<width {
                 let i = y * width + x
                 let oldPixel = grayPlane[i]
                 let newPixel = oldPixel < 128 ? 0 : 255
                 grayPlane[i] = newPixel
-                
                 let error = oldPixel - newPixel
                 
                 if x + 1 < width {
@@ -300,8 +299,7 @@ class PrinterService: NSObject {
             }
         }
         
-        // 3. Pack Bits (Raster Bit Image)
-        // Command: GS v 0
+        // Pack Bits
         var escPosData: [UInt8] = []
         let widthBytes = (width + 7) / 8
         let header: [UInt8] = [
@@ -317,7 +315,6 @@ class PrinterService: NSObject {
                 for bit in 0..<8 {
                     let x = xByte * 8 + bit
                     if x < width {
-                        // 0 is black (print), 255 is white
                         if grayPlane[y * width + x] == 0 {
                             byteValue |= (1 << (7 - bit))
                         }
@@ -326,7 +323,6 @@ class PrinterService: NSObject {
                 escPosData.append(byteValue)
             }
         }
-        
         return escPosData
     }
     
@@ -339,7 +335,6 @@ class PrinterService: NSObject {
 extension PrinterService: CBCentralManagerDelegate, CBPeripheralDelegate {
     
     func startScan() {
-        // Scanning for all devices. In production, provide service UUIDs if known.
         centralManager.scanForPeripherals(withServices: nil, options: nil)
     }
     
@@ -350,16 +345,7 @@ extension PrinterService: CBCentralManagerDelegate, CBPeripheralDelegate {
     }
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        // Simple logic: If we have a saved name/uuid, connect.
-        // Or connect to the first device named "Printer" (Adjust logic as needed)
-        
         let name = peripheral.name ?? "Unknown"
-        // Note: iOS hides MAC Address. We must use Name or Identifier (UUID)
-        
-        // Logic: If user selected a specific Mac (from Flutter side), we can't match it directly on iOS.
-        // We usually rely on the Name matching or the User selecting it in the iOS UI.
-        
-        // For this example, we connect if the name sounds like a printer
         if name.contains("Printer") || name.contains("MTP") || name.contains("InnerPrinter") {
             self.connectedPeripheral = peripheral
             centralManager.stopScan()
@@ -382,13 +368,10 @@ extension PrinterService: CBCentralManagerDelegate, CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let characteristics = service.characteristics else { return }
         for char in characteristics {
-            // Look for Write Property
             if char.properties.contains(.write) || char.properties.contains(.writeWithoutResponse) {
                 self.writeCharacteristic = char
-                // Ready to print
                 if isPrinting, let url = printQueue.first {
-                     // Start processing the first item in queue if we just connected
-                    // (Logic handled in printPdf, but safety check here)
+                   // Ready to print
                 }
             }
         }
@@ -401,8 +384,14 @@ extension UIImage {
     func resize(to width: Int) -> UIImage {
         let scale = CGFloat(width) / self.size.width
         let newHeight = self.size.height * scale
-        UIGraphicsBeginImageContext(CGSize(width: CGFloat(width), height: newHeight))
-        self.draw(in: CGRect(x: 0, y: 0, width: CGFloat(width), height: newHeight))
+        let size = CGSize(width: CGFloat(width), height: newHeight)
+        
+        UIGraphicsBeginImageContext(size)
+        if let ctx = UIGraphicsGetCurrentContext() {
+            ctx.setFillColor(UIColor.white.cgColor)
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }
+        self.draw(in: CGRect(x: 0, y: 0, width: size.width, height: size.height))
         let newImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return newImage ?? self
@@ -417,7 +406,7 @@ extension UIImage {
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * width
         let bitsPerComponent = 8
-        var rawData = [UInt8](repeating: 0, count: height * width * 4)
+        var rawData = [UInt8](repeating: 255, count: height * width * 4)
         
         guard let context = CGContext(data: &rawData,
                                       width: width,
@@ -436,7 +425,6 @@ extension UIImage {
         var foundContent = false
         let threshold: UInt8 = 240
         
-        // Scan for content
         for y in 0..<height {
             for x in 0..<width {
                 let offset = (y * width + x) * 4
@@ -444,7 +432,6 @@ extension UIImage {
                 let g = rawData[offset + 1]
                 let b = rawData[offset + 2]
                 
-                // If pixel is darker than white
                 if r < threshold || g < threshold || b < threshold {
                     if x < minX { minX = x }
                     if x > maxX { maxX = x }
@@ -457,12 +444,13 @@ extension UIImage {
         
         if !foundContent { return nil }
         
-        // Add Padding
-        let padding = 5
+        // FIX: Minimized padding to ensure seamless stitching
+        // We only add 1 pixel of breathing room to avoid cutting text
+        let padding = 1
         minX = max(0, minX - padding)
         maxX = min(width, maxX + padding)
         minY = max(0, minY - padding)
-        maxY = min(height, maxY + padding + 40) // Bottom padding for cutter
+        maxY = min(height, maxY + padding) 
         
         let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
         guard let cropped = cgImage.cropping(to: rect) else { return nil }
