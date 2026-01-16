@@ -102,7 +102,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   File? _localFile;
 
   final TransformationController _transformController = TransformationController();
-  final GlobalKey _globalKey = GlobalKey(); // To capture the generated receipt
+  final GlobalKey _globalKey = GlobalKey(); 
 
   // Bluetooth State
   BluetoothDevice? _connectedDevice;
@@ -272,11 +272,15 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                    Expanded(
                      child: SingleChildScrollView(
                        child: RepaintBoundary(
-                         key: _globalKey, // <--- Key must be in tree here
-                         child: Container(
-                           color: Colors.white,
-                           padding: const EdgeInsets.all(10),
-                           child: OdooReceiptLayout(data: data),
+                         key: _globalKey, 
+                         child: Material(
+                           // FIX: White background ensures thermal printer doesn't print black box
+                           color: Colors.white, 
+                           child: Container(
+                             color: Colors.white,
+                             padding: const EdgeInsets.all(10),
+                             child: OdooReceiptLayout(data: data),
+                           ),
                          ),
                        ),
                      ),
@@ -286,20 +290,25 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                      child: Row(
                        mainAxisAlignment: MainAxisAlignment.end,
                        children: [
-                         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                         TextButton(
+                           onPressed: () => Navigator.pop(ctx), 
+                           child: const Text("Cancel")
+                         ),
                          const SizedBox(width: 10),
                          ElevatedButton.icon(
                            icon: const Icon(Icons.print),
                            label: const Text("Print This"),
                            onPressed: () async {
-                             // FIX: Capture BEFORE popping the dialog
+                             // FIX: Capture -> Close -> Print Sequence
                              bool success = await _captureAndSaveReceipt();
-                             if (success) {
+                             if (success && mounted) {
                                Navigator.pop(ctx);
-                               // Small delay to allow dialog to close before printing starts
-                               Future.delayed(const Duration(milliseconds: 200), () {
+                               // Slight delay to ensure Dialog disposal doesn't lag the print
+                               Future.delayed(const Duration(milliseconds: 300), () {
                                  _doPrint(); 
                                });
+                             } else {
+                               _showSnackBar("Failed to capture receipt image.", isError: true);
                              }
                            },
                          ),
@@ -323,6 +332,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   /// Captures the RepaintBoundary to a File and updates _localFile
   Future<bool> _captureAndSaveReceipt() async {
     try {
+      // Small delay to ensure frame is painted
+      await Future.delayed(const Duration(milliseconds: 100));
+
       RenderRepaintBoundary? boundary = _globalKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       
       if (boundary == null) {
@@ -330,7 +342,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         return false;
       }
 
-      // Capture image with higher pixel ratio for clarity
+      // Capture image (pixelRatio 2.0 is good for 58mm/80mm)
       ui.Image image = await boundary.toImage(pixelRatio: 2.0); 
       ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       
@@ -342,10 +354,12 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         final File file = File(tempPath);
         await file.writeAsBytes(pngBytes);
 
-        setState(() {
-          _localFile = file; // Switch current file to this new image
-          _previewBytes = [pngBytes]; // Update preview to show what will print
-        });
+        if (mounted) {
+          setState(() {
+            _localFile = file; // Switch current file to this new image
+            _previewBytes = [pngBytes]; // Update preview
+          });
+        }
         return true;
       }
       return false;
@@ -362,6 +376,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     double total = 0.0;
     List<ReceiptItem> items = [];
 
+    // Simple RegEx parsing logic
     final RegExp totalRegex = RegExp(r'(Total|Grand Total|Amount)[\s\:\$RM]*([\d\.,]+)', caseSensitive: false);
     final RegExp orderRegex = RegExp(r'(Order|Ref|Inv)[\s\:\.]*([A-Za-z0-9\-]+)', caseSensitive: false);
     
@@ -376,6 +391,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     List<String> lines = text.split('\n');
     for (var line in lines) {
+      // Basic line item heuristic: Ends with a number like 12.00
       if (RegExp(r'\d+\.\d{2}$').hasMatch(line) && !line.toLowerCase().contains("total")) {
         List<String> parts = line.split(RegExp(r'\s+'));
         if (parts.length > 1) {
@@ -408,8 +424,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
   Future<void> _doPrint() async {
     final lang = Provider.of<LanguageService>(context, listen: false);
-    if (_localFile == null) {
-      _showSnackBar(lang.translate('err_file_not_found'), isError: true);
+    
+    // Safety check
+    if (_localFile == null || !await _localFile!.exists()) {
+      _showSnackBar("No receipt file to print.", isError: true);
       return;
     }
 
@@ -421,26 +439,26 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       
       // 1. Get Settings
       String targetMac = widget.connectedMac ?? prefs.getString('selected_printer_mac') ?? "";
-      
-      // FIX: Get the width saved by WidthSettings page
       int savedWidth = prefs.getInt('printer_width_dots') ?? WIDTH_58MM; 
       
-      // 2. Connect to Bluetooth
+      if (targetMac.isEmpty) {
+         throw Exception(lang.translate('msg_disconnected'));
+      }
+
+      // 2. Connect to Bluetooth (Fixed Logic)
       await _connectBluetooth(targetMac);
 
       if (_connectedDevice == null || _writeCharacteristic == null) {
-        throw Exception("Printer not found or disconnected");
+        throw Exception("Printer connection failed.");
       }
 
-      // 3. Process PDF/Image -> ESC/POS Bytes
+      // 3. Process Image -> ESC/POS Bytes
       bool isPdf = _localFile!.path.toLowerCase().endsWith('.pdf');
-
-      // 4. Capture Root Isolate Token
       RootIsolateToken? rootToken = RootIsolateToken.instance;
 
       List<int> dataToSend = await compute(_processPdfToEscPos, {
         'fileBytes': await _localFile!.readAsBytes(),
-        'width': savedWidth, // Use the saved width (384 or 576)
+        'width': savedWidth, 
         'init': INIT_PRINTER,
         'feed': FEED_PAPER,
         'cut': CUT_PAPER,
@@ -448,7 +466,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         'rootToken': rootToken, 
       });
 
-      // 5. Send Bytes
+      // 4. Send Bytes
       await _sendToPrinter(dataToSend);
 
       if (mounted) _showSnackBar(lang.translate('msg_added_queue'));
@@ -461,59 +479,85 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   Future<void> _connectBluetooth(String targetMac) async {
-    if (_connectedDevice != null && _writeCharacteristic != null) {
-      if (_connectedDevice!.isConnected) return;
+    // A. Check if already connected
+    if (_connectedDevice != null && _connectedDevice!.isConnected) {
+      return; // Already ready
     }
 
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-
-    BluetoothDevice? foundDevice;
+    // B. Scan for device (Non-blocking)
+    debugPrint("Scanning for $targetMac...");
     
-    await for (var results in FlutterBluePlus.scanResults) {
-      for (ScanResult r in results) {
-        String name = r.device.platformName;
-        String id = r.device.remoteId.str;
-        
-        if (targetMac.isNotEmpty && id == targetMac) {
-          foundDevice = r.device;
-          break;
-        }
-        
-        if (targetMac.isEmpty && (name.contains("Printer") || name.contains("MTP") || name.contains("InnerPrinter"))) {
-          foundDevice = r.device;
-          break;
-        }
-      }
-      if (foundDevice != null) break;
-    }
-    
-    await FlutterBluePlus.stopScan();
+    StreamSubscription? scanSubscription;
+    Completer<BluetoothDevice?> deviceCompleter = Completer();
 
-    if (foundDevice != null) {
-      _connectedDevice = foundDevice;
-      await _connectedDevice!.connect();
+    try {
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
       
-      List<BluetoothService> services = await _connectedDevice!.discoverServices();
-      for (var service in services) {
-        for (var char in service.characteristics) {
-          if (char.properties.write || char.properties.writeWithoutResponse) {
-            _writeCharacteristic = char;
-            return;
+      scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        for (ScanResult r in results) {
+          if (r.device.remoteId.str == targetMac) {
+             if (!deviceCompleter.isCompleted) deviceCompleter.complete(r.device);
+             FlutterBluePlus.stopScan(); 
+             break;
+          }
+        }
+      });
+
+      // Wait for scan to finish or device found
+      BluetoothDevice? device = await deviceCompleter.future.timeout(
+        const Duration(seconds: 4), 
+        onTimeout: () => null
+      );
+
+      scanSubscription.cancel();
+
+      if (device == null) {
+        // If not found in scan, try creating instance directly (works on some OS)
+        device = BluetoothDevice.fromId(targetMac);
+      }
+
+      // C. Connect
+      if (device != null) {
+        await device.connect(autoConnect: false);
+        _connectedDevice = device;
+        
+        // Discover services to find write char
+        List<BluetoothService> services = await _connectedDevice!.discoverServices();
+        for (var service in services) {
+          for (var char in service.characteristics) {
+            if (char.properties.write || char.properties.writeWithoutResponse) {
+              _writeCharacteristic = char;
+              debugPrint("Write characteristic found: ${char.uuid}");
+              return;
+            }
           }
         }
       }
+
+    } catch (e) {
+      debugPrint("Bluetooth Error: $e");
+      scanSubscription?.cancel();
     }
   }
 
   Future<void> _sendToPrinter(List<int> data) async {
     if (_writeCharacteristic == null) return;
+    
+    // Chunking to prevent buffer overflow (Adjusted for safety)
     const int chunkSize = 150; 
     
     for (int i = 0; i < data.length; i += chunkSize) {
       int end = (i + chunkSize < data.length) ? i + chunkSize : data.length;
       List<int> chunk = data.sublist(i, end);
-      await _writeCharacteristic!.write(chunk, withoutResponse: true);
-      await Future.delayed(const Duration(milliseconds: 20));
+      
+      // Use writeWithoutResponse for speed, but catch errors
+      try {
+        await _writeCharacteristic!.write(chunk, withoutResponse: true);
+        // Important: Give printer time to digest data
+        await Future.delayed(const Duration(milliseconds: 30)); 
+      } catch (e) {
+        debugPrint("Write failed: $e");
+      }
     }
   }
 
@@ -536,39 +580,44 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     List<int> dataToSend = [];
     
-    // Header
     dataToSend.addAll(initCmd);
     dataToSend.addAll([0x1B, 0x61, 0x01]); // Align Center
 
     List<img.Image> rawImages = [];
 
-    if (isPdf) {
-      await for (var page in Printing.raster(fileBytes, dpi: 200)) {
-        final png = await page.toPng();
-        final image = img.decodePng(png);
+    try {
+      if (isPdf) {
+        await for (var page in Printing.raster(fileBytes, dpi: 200)) {
+          final png = await page.toPng();
+          final image = img.decodePng(png);
+          if (image != null) rawImages.add(image);
+        }
+      } else {
+        // Robust image decoding
+        final image = img.decodeImage(fileBytes);
         if (image != null) rawImages.add(image);
       }
-    } else {
-      final image = img.decodeImage(fileBytes);
-      if (image != null) rawImages.add(image);
+
+      int count = math.min(rawImages.length, 50);
+
+      for (int i = 0; i < count; i++) {
+        img.Image src = rawImages[i];
+
+        // Trim whitespace
+        img.Image? trimmed = _trimImage(src);
+        if (trimmed == null) continue; 
+
+        // Resize
+        img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
+
+        // Convert to Bits
+        List<int> escBytes = _convertImageToEscPos(resized);
+        dataToSend.addAll(escBytes);
+      }
+    } catch (e) {
+      debugPrint("Processing Error in Isolate: $e");
     }
 
-    int count = math.min(rawImages.length, 50);
-
-    for (int i = 0; i < count; i++) {
-      img.Image src = rawImages[i];
-
-      img.Image? trimmed = _trimImage(src);
-      if (trimmed == null) continue; 
-
-      // Resize to the Target Width from Settings
-      img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
-
-      List<int> escBytes = _convertImageToEscPos(resized);
-      dataToSend.addAll(escBytes);
-    }
-
-    // Footer
     dataToSend.addAll(feedCmd);
     dataToSend.addAll(cutCmd);
 
@@ -578,15 +627,13 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   static List<int> _convertImageToEscPos(img.Image src) {
     int width = src.width;
     int height = src.height;
-    
-    // Grayscale Array
     List<int> grayPlane = List.filled(width * height, 255);
 
-    // Grayscale + Contrast
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
 
+        // FIX: Handle Alpha. If transparent, treat as white (255)
         if (p.a < 128) {
           grayPlane[y * width + x] = 255;
           continue;
@@ -596,6 +643,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         double g = p.g.toDouble();
         double b = p.b.toDouble();
         
+        // Boost contrast
         double rC = (r * 1.2 - 20).clamp(0, 255);
         double gC = (g * 1.2 - 20).clamp(0, 255);
         double bC = (b * 1.2 - 20).clamp(0, 255);
@@ -605,7 +653,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
     }
 
-    // Dither
+    // Floyd-Steinberg Dither
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         int i = y * width + x;
@@ -634,11 +682,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
     }
 
-    // Pack Bits
+    // Pack Bits for GS v 0
     List<int> escPosData = [];
     int widthBytes = (width + 7) ~/ 8;
     
-    // GS v 0 Command
     escPosData.addAll([0x1D, 0x76, 0x30, 0x00]);
     escPosData.add(widthBytes % 256);
     escPosData.add(widthBytes ~/ 256);
@@ -659,7 +706,6 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         escPosData.add(byteValue);
       }
     }
-
     return escPosData;
   }
 
@@ -676,9 +722,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
-        
         if (p.a < 128) continue; 
-
         if (p.r < threshold || p.g < threshold || p.b < threshold) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
@@ -877,10 +921,10 @@ class OdooReceiptLayout extends StatelessWidget {
         
         // Order Info
         Row(children: [
-           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-             Text("${lang.translate('rcpt_order_no')} ${data.orderNo}", style: styleNormal),
-             Text("${lang.translate('rcpt_date')} ${data.date}", style: styleNormal),
-           ])
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text("${lang.translate('rcpt_order_no')} ${data.orderNo}", style: styleNormal),
+              Text("${lang.translate('rcpt_date')} ${data.date}", style: styleNormal),
+            ])
         ]),
 
         const SizedBox(height: 5),
