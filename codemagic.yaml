@@ -100,7 +100,7 @@ workflows:
           cp -r Runner.app Payload/
           
           # Zip into IPA
-          zip -r epos_pilot.ipa Payload
+          zip -r MyInvois_e-Pos.ipa Payload
 
     artifacts:
       - build/ios/iphoneos/*.ipa
