@@ -1,28 +1,22 @@
 workflows:
-  ios-unsigned-fix:
-    name: iOS Unsigned (Share Extension Build)
+  ios-unsigned-build:
+    name: iOS Build (Unsigned for 3uTools)
+    instance_type: mac_mini_m2
     max_build_duration: 60
-    instance_type: mac_mini_m1
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
-      
     scripts:
-      - name: Clean Build Artifacts
+      - name: Clean and Get Packages
         script: |
-          # INSTEAD OF DELETING THE PROJECT, WE JUST CLEAN
           flutter clean
-          rm -rf ios/Pods
-          rm -f ios/Podfile.lock
-
-      - name: Get Flutter packages
-        script: |
           flutter pub get
 
-      - name: Configure Podfile with Permissions
+      - name: Configure Podfile (Maintain iOS Data/Permissions)
         script: |
-          # Overwrite ios/Podfile to ensure iOS 13 and permissions
+          # This step restores your specific iOS settings (Permissions, iOS 13.0)
+          # preventing "missing permission" crashes later.
           cat <<EOF > ios/Podfile
           platform :ios, '13.0'
           ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -55,8 +49,6 @@ workflows:
             use_modular_headers!
 
             flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-            
-            # REMOVED: target 'ShareExtension' block because the target does not exist in Xcode
           end
 
           post_install do |installer|
@@ -77,30 +69,38 @@ workflows:
           end
           EOF
 
-      - name: Install Pods
+      - name: Patch AppDelegate (Fix PrintService Crash)
+        script: |
+          # Finds lines with "PrintService" in AppDelegate.swift and comments them out
+          # This prevents the "Cannot find PrintService in scope" build error
+          sed -i '' 's/.*PrintService.*/\/\/ &/' ios/Runner/AppDelegate.swift
+
+      - name: Install CocoaPods (Clean Install)
         script: |
           cd ios
-          pod install
+          rm -rf Pods
+          rm -rf Podfile.lock
+          pod install --repo-update
           cd ..
 
-      - name: Build iOS App (No Codesign)
+      - name: Build iOS Release (No Code Signing)
         script: |
-          # Build Release without signing
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
 
-      - name: Package as IPA
+      - name: Create IPA from .app
         script: |
           cd build/ios/iphoneos
           
-          # Create IPA structure
+          # Clean up previous artifacts
+          rm -rf Payload
+          rm -rf *.ipa
+          
+          # Create Payload structure
           mkdir Payload
-          mv Runner.app Payload/
+          cp -r Runner.app Payload/
           
           # Zip into IPA
-          zip -r -y app_unsigned.ipa Payload/
-          
-          # Export
-          mv app_unsigned.ipa $CM_EXPORT_DIR/runner_unsigned.ipa
+          zip -r epos_pilot.ipa Payload
 
     artifacts:
-      - $CM_EXPORT_DIR/*.ipa
+      - build/ios/iphoneos/*.ipa
