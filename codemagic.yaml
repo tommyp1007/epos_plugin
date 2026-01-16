@@ -7,7 +7,7 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
-    
+      
     scripts:
       - name: Clean Build Artifacts
         script: |
@@ -56,11 +56,7 @@ workflows:
 
             flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
             
-            # --- SHARE EXTENSION TARGET ---
-            # This ensures the extension has access to necessary pods if needed
-            target 'ShareExtension' do
-              inherit! :search_paths
-            end
+            # REMOVED: target 'ShareExtension' block because the target does not exist in Xcode
           end
 
           post_install do |installer|
