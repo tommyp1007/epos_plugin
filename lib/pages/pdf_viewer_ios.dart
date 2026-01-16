@@ -120,7 +120,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       final prefs = await SharedPreferences.getInstance();
       int? savedWidth = prefs.getInt('printer_width_dots');
       _printerWidth = (savedWidth != null && savedWidth > 0) ? savedWidth : 384;
-        
+       
       await _prepareDocument();
     } catch (e) {
       debugPrint("Error loading settings: $e");
@@ -140,7 +140,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
         fileToProcess = File(cleanPath);
-          
+         
         if (!await fileToProcess.exists()) {
           throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
         }
@@ -154,39 +154,50 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       _previewImages.clear();
       _readyToPrintChunks.clear();
       
+      // Stop the full screen loader, start the "Working..." status
       if (mounted) setState(() { _isLoading = false; _isProcessingPages = true; });
 
       // --- START PROCESSING ---
       
+      // Temporary list to hold raw pages for the printer queue
+      List<Uint8List> pagesToProcessForPrinter = [];
+
       if (isPdf) {
-        // Rasterize PDF pages one by one
+        // STEP 1: Fast Preview Loop
+        // Rasterize and show raw images immediately so user doesn't wait
         await for (var page in Printing.raster(rawBytes, dpi: 300)) {
           if (!mounted) break;
           
           final pngBytes = await page.toPng();
           
-          // Offload heavy work to background isolate
-          final ProcessedResult result = await compute(
-            _heavyImageProcessing, 
-            ProcessingTask(pngBytes, _printerWidth)
-          );
+          // Store for printer processing later
+          pagesToProcessForPrinter.add(pngBytes);
 
+          // Update UI immediately
           setState(() {
-            _previewImages.add(result.displayBytes);
-            _readyToPrintChunks.add(result.printBytes);
+            _previewImages.add(pngBytes);
           });
         }
       } else {
         // Single Image
-        final ProcessedResult result = await compute(
-            _heavyImageProcessing, 
-            ProcessingTask(rawBytes, _printerWidth)
-        );
-        
+        pagesToProcessForPrinter.add(rawBytes);
         setState(() {
-           _previewImages.add(result.displayBytes);
-           _readyToPrintChunks.add(result.printBytes);
+           _previewImages.add(rawBytes);
         });
+      }
+
+      // STEP 2: Heavy Printer Processing (Background)
+      // Now that the user can see the document, we generate the printer data
+      for (var pBytes in pagesToProcessForPrinter) {
+        if (!mounted) break;
+        
+        // Offload heavy work to background isolate
+        final ProcessedResult result = await compute(
+          _heavyImageProcessing, 
+          ProcessingTask(pBytes, _printerWidth)
+        );
+
+        _readyToPrintChunks.add(result.printBytes);
       }
 
       if (mounted) {
@@ -340,7 +351,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                       if (_previewImages.isEmpty && !_isProcessingPages)
                           // UPDATED: Use 'err_decode' (Could not decode content) as closest match
                           Center(child: Text(lang.translate('err_decode'))),
-                       
+                        
                       // Render all pages
                       ..._previewImages.map((bytes) => Container(
                         // VISUAL PREVIEW: Keep slight margin for UI, but actual print is seamless
