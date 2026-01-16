@@ -32,6 +32,7 @@ dependencies:
   usb_serial: ^0.5.0             # USB OTG connection
   network_info_plus: ^7.0.0      # WiFi IP discovery
   ping_discover_network_forked: ^0.0.1 # Scan network ports (9100)
+  http: ^1.2.0                   # NEW: Download files from URLs
 
   # ------------------------------------------------
   # System, Storage & Permissions
@@ -41,6 +42,7 @@ dependencies:
   shared_preferences: ^2.5.4     # Local storage (Settings)
   flutter_sharing_intent: ^2.0.4      # Appear in "Share" intent menus
   file_picker: ^8.0.0         # Pick files from device storage
+  path_provider: ^2.1.2          # NEW: Get temporary directory for OCR
 
   # ------------------------------------------------
   # Media & Image Processing
@@ -53,8 +55,16 @@ dependencies:
   # ------------------------------------------------
   cupertino_icons: ^1.0.8        # iOS style icons
   webview_flutter: ^4.13.0       # Render web content
+  intl: ^0.20.2                 # NEW: Currency & Date formatting (RM 0.00)
+  barcode_widget: ^2.0.4         # NEW: Render QR Codes/Barcodes on screen
 
   android_intent_plus: ^6.0.0
+
+  # ------------------------------------------------
+  # ML Kit (OCR & Scanning)
+  # ------------------------------------------------
+  google_mlkit_text_recognition: ^0.15.0   # Extract text from A4
+  google_mlkit_barcode_scanning: ^0.14.1   # NEW: Scan Barcodes/QR from A4
 
 dev_dependencies:
   flutter_test:

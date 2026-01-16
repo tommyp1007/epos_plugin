@@ -53,6 +53,22 @@ class AppTranslations {
       'err_decode': 'Could not decode content.',
       'err_download': 'Download Failed:',
 
+      // Section 6 (Receipt Layout) -- NEW ADDITIONS
+      'rcpt_scan_qr': 'Scan QR Code to Request E-Invoice',
+      'rcpt_order_no': 'Order No.:',
+      'rcpt_date': 'Date:',
+      'rcpt_timeline_title': 'Request Timeline:',
+      'rcpt_start_date': 'Start Date: Next day after purchase',
+      'rcpt_last_date': 'Last Date: 1st calendar day of following month',
+      'rcpt_col_product': 'Product',
+      'rcpt_col_price': 'Price',
+      'rcpt_col_qty': 'Qty',
+      'rcpt_col_total': 'Total',
+      'rcpt_subtotal': 'Subtotal:',
+      'rcpt_tax': 'Tax:',
+      'rcpt_total_caps': 'TOTAL:',
+      'rcpt_thank_you': 'Thank you for visiting!',
+
       // Snackbars / Status
       'msg_disconnected': 'Disconnected.',
       'msg_connected': 'Connected to',
@@ -121,7 +137,7 @@ class AppTranslations {
       'msg_detect_huawei': 'Detected Huawei Device. Defaulting to 58mm.',
       'msg_unknown_internal': 'Unknown Internal Device. Defaulting to 58mm.',
       'msg_detect_error': 'Detection Error. Defaulting to 58mm.',
-      
+
       // Cache & Reload
       'msg_cache_cleared': 'Cache Cleared. Reloading...',
       'msg_reloading': 'Page is Reloading...',
@@ -197,6 +213,22 @@ class AppTranslations {
       'err_decode': 'Tidak dapat menyahkod kandungan.',
       'err_download': 'Muat Turun Gagal:',
 
+      // Section 6 (Receipt Layout) -- NEW ADDITIONS
+      'rcpt_scan_qr': 'Imbas Kod QR untuk Minta E-Invois',
+      'rcpt_order_no': 'No. Pesanan:',
+      'rcpt_date': 'Tarikh:',
+      'rcpt_timeline_title': 'Garis Masa Permintaan:',
+      'rcpt_start_date': 'Tarikh Mula: Hari berikutnya selepas pembelian',
+      'rcpt_last_date': 'Tarikh Akhir: 1hb kalendar bulan berikutnya',
+      'rcpt_col_product': 'Produk',
+      'rcpt_col_price': 'Harga',
+      'rcpt_col_qty': 'Kuantiti',
+      'rcpt_col_total': 'Jumlah',
+      'rcpt_subtotal': 'Subjumlah:',
+      'rcpt_tax': 'Cukai:',
+      'rcpt_total_caps': 'JUMLAH:',
+      'rcpt_thank_you': 'Terima kasih kerana berkunjung!',
+
       // Snackbars / Status
       'msg_disconnected': 'Terputus.',
       'msg_connected': 'Berjaya sambung ke',
@@ -265,7 +297,7 @@ class AppTranslations {
       'msg_detect_huawei': 'Dikesan Peranti Huawei. Tetapan asal 58mm.',
       'msg_unknown_internal': 'Peranti Dalaman Tidak Diketahui. Tetapan asal 58mm.',
       'msg_detect_error': 'Ralat Pengesanan. Tetapan asal 58mm.',
-      
+
       // Cache & Reload
       'msg_cache_cleared': 'Cache Dibersihkan. Memuat semula...',
       'msg_reloading': 'Halaman sedang dimuat semula...',
@@ -306,7 +338,7 @@ class LanguageService with ChangeNotifier {
   Locale _currentLocale = const Locale('en');
 
   Locale get currentLocale => _currentLocale;
-  String get currentLanguage => _currentLocale.languageCode; 
+  String get currentLanguage => _currentLocale.languageCode;
 
   LanguageService() {
     _loadLanguage();
