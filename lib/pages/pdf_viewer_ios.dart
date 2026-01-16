@@ -2,16 +2,18 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui'; // Required for Isolate tokens
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Required for RootIsolateToken
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart';
-import 'package:image/image.dart' as img; // Required for image processing
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // Required for BLE
+import 'package:image/image.dart' as img; 
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 
 import '../services/printer_service.dart';
 import '../services/language_service.dart';
@@ -180,24 +182,32 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         throw Exception("Printer not found or disconnected");
       }
 
-      // 3. Determine Width based on Name
+      // 3. Determine Width
       int targetWidth = savedWidth > 0 ? savedWidth : WIDTH_58MM;
       String devName = _connectedDevice!.platformName.toUpperCase();
       if (devName.contains("80") || devName.contains("T80")) {
         targetWidth = WIDTH_80MM;
       }
 
-      // 4. Process PDF -> ESC/POS Bytes (Heavy Lifting)
+      // 4. Capture Root Isolate Token (CRITICAL FIX)
+      RootIsolateToken? rootToken = RootIsolateToken.instance;
+      if (rootToken == null) {
+        // Fallback or throw error if token is missing
+        debugPrint("Warning: RootIsolateToken is null");
+      }
+
+      // 5. Process PDF -> ESC/POS Bytes (Heavy Lifting)
       List<int> dataToSend = await compute(_processPdfToEscPos, {
         'fileBytes': await _localFile!.readAsBytes(),
         'width': targetWidth,
         'init': INIT_PRINTER,
         'feed': FEED_PAPER,
         'cut': CUT_PAPER,
-        'isPdf': _localFile!.path.toLowerCase().endsWith('.pdf')
+        'isPdf': _localFile!.path.toLowerCase().endsWith('.pdf'),
+        'rootToken': rootToken, // Pass the token here
       });
 
-      // 5. Send Bytes
+      // 6. Send Bytes
       await _sendToPrinter(dataToSend);
 
       if (mounted) _showSnackBar(lang.translate('msg_added_queue'));
@@ -267,10 +277,16 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   }
 
   // =========================================================
-  // MARK: - IMAGE PROCESSING (FIXED FOR BLACK FRAME)
+  // MARK: - IMAGE PROCESSING (FIXED)
   // =========================================================
 
   static Future<List<int>> _processPdfToEscPos(Map<String, dynamic> params) async {
+    // 1. Initialize Background Messenger (CRITICAL FIX)
+    RootIsolateToken? rootToken = params['rootToken'];
+    if (rootToken != null) {
+      BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
+    }
+
     Uint8List fileBytes = params['fileBytes'];
     int targetWidth = params['width'];
     List<int> initCmd = params['init'];
@@ -288,6 +304,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     if (isPdf) {
       // Use Printing package to rasterize
+      // Printing package might use platform channels, so initialization above is vital.
       await for (var page in Printing.raster(fileBytes, dpi: 200)) {
         final png = await page.toPng();
         final image = img.decodePng(png);
@@ -303,14 +320,14 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     for (int i = 0; i < count; i++) {
       img.Image src = rawImages[i];
 
-      // 1. Trim Whitespace (Updated to handle Transparency)
+      // Trim Whitespace (Handles Transparency)
       img.Image? trimmed = _trimImage(src);
       if (trimmed == null) continue; 
 
-      // 2. Resize to Printer Width
+      // Resize
       img.Image resized = img.copyResize(trimmed, width: targetWidth, interpolation: img.Interpolation.cubic);
 
-      // 3. Convert to Bytes (Updated to handle Transparency)
+      // Convert to Bytes
       List<int> escBytes = _convertImageToEscPos(resized);
       dataToSend.addAll(escBytes);
     }
@@ -326,28 +343,25 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     int width = src.width;
     int height = src.height;
     
-    // Grayscale Array (Int array 0-255)
+    // Grayscale Array
     List<int> grayPlane = List.filled(width * height, 255);
 
-    // 1. Grayscale + Contrast
+    // Grayscale + Contrast
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
 
-        // --- FIX: CHECK ALPHA CHANNEL ---
-        // If the pixel is transparent, force it to be WHITE (255).
-        // Without this, transparent = (0,0,0,0) = Black in grayscale logic.
+        // Check Alpha (Transparency -> White)
         if (p.a < 128) {
           grayPlane[y * width + x] = 255;
           continue;
         }
-        // --------------------------------
 
         double r = p.r.toDouble();
         double g = p.g.toDouble();
         double b = p.b.toDouble();
         
-        // Contrast Logic
+        // Contrast
         double rC = (r * 1.2 - 20).clamp(0, 255);
         double gC = (g * 1.2 - 20).clamp(0, 255);
         double bC = (b * 1.2 - 20).clamp(0, 255);
@@ -358,7 +372,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
     }
 
-    // 2. Dither (Floyd-Steinberg)
+    // Dither
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         int i = y * width + x;
@@ -387,7 +401,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       }
     }
 
-    // 3. Pack Bits
+    // Pack Bits
     List<int> escPosData = [];
     int widthBytes = (width + 7) ~/ 8;
     
@@ -431,10 +445,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       for (int x = 0; x < width; x++) {
         img.Pixel p = src.getPixel(x, y);
         
-        // --- FIX: Check Alpha Here Too ---
-        // If it is transparent, it is BACKGROUND, not content.
+        // Check Alpha
         if (p.a < 128) continue; 
-        // ---------------------------------
 
         if (p.r < threshold || p.g < threshold || p.b < threshold) {
           if (x < minX) minX = x;
