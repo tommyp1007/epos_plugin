@@ -16,7 +16,7 @@ import '../services/language_service.dart';
 
 class PdfViewerPage extends StatefulWidget {
   final String filePath;
-  final PrinterService printerService; 
+  final PrinterService printerService; // Kept for dependency consistency
   final String? connectedMac;
   final bool autoPrint;
 
@@ -33,6 +33,7 @@ class PdfViewerPage extends StatefulWidget {
 }
 
 class _PdfViewerPageState extends State<PdfViewerPage> {
+  // This channel name MUST match the one in your AppDelegate.swift
   static const platform = MethodChannel('com.zen.printer/channel');
 
   bool _isLoading = true; 
@@ -75,6 +76,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     final File sourceFile = File(sourcePath);
     final Directory tempDir = await getTemporaryDirectory();
     final String fileName = sourcePath.split('/').last.replaceAll(RegExp(r'[^\w\.-]'), '_');
+    
+    // We create a clean path in the temp directory that iOS can easily read
     final String safePath = '${tempDir.path}/$fileName';
     final File destFile = File(safePath);
 
@@ -96,6 +99,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     String cleanPath = widget.filePath;
     
     try {
+      // 1. Get the file to a local path (Download if HTTP, Copy if local)
       if (cleanPath.toLowerCase().startsWith('http')) {
         _localFile = await _downloadFile(cleanPath);
       } else {
@@ -111,6 +115,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       _previewBytes.clear();
 
+      // 2. Generate Visual Previews
+      // Note: These previews are JUST for the screen. 
+      // The actual printing is handled by sending the PDF path to Swift.
       if (isPdf) {
         final pdfBytes = await _localFile!.readAsBytes();
         
@@ -123,6 +130,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
            }
         }
       } else {
+        // It's an image
         final bytes = await _localFile!.readAsBytes();
         if (mounted) {
           setState(() {
@@ -171,6 +179,10 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       final prefs = await SharedPreferences.getInstance();
       final String savedMac = prefs.getString('selected_printer_mac') ?? "";
 
+      // 
+      // 1. We invoke 'printPdf' here
+      // 2. iOS AppDelegate catches this
+      // 3. iOS executes the Swift PrinterService
       await platform.invokeMethod('printPdf', {
         'path': _localFile!.path,
         'macAddress': savedMac.isNotEmpty ? savedMac : null
