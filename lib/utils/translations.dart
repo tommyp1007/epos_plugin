@@ -39,7 +39,7 @@ class AppTranslations {
       'desc_select_doc': 'Pick a PDF or Image to print',
 
       // Section 5 (PDF Preview & Queue)
-      'preview_title': 'MyInvois Receipt Preview',
+      'title_preview': 'PDF Viewer',
       'lbl_queue': 'Queue',
       'status_queue_full': 'QUEUE FULL - PLEASE WAIT',
       'status_printing': 'PRINTING IN PROGRESS',
@@ -183,7 +183,7 @@ class AppTranslations {
       'desc_select_doc': 'Pilih PDF atau Imej untuk dicetak',
 
       // Section 5 (PDF Preview & Queue)
-      'preview_title': 'Pratonton Resit MyInvois',
+      'title_preview': 'Paparan PDF',
       'lbl_queue': 'Giliran',
       'status_queue_full': 'GILIRAN PENUH - TUNGGU SEBENTAR',
       'status_printing': 'SEDANG MENCETAK',
