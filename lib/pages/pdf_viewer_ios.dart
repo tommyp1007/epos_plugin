@@ -34,6 +34,7 @@ class ProcessedResult {
 }
 
 // --- HEAVY PROCESSING FUNCTION (Runs in Background) ---
+// Must be top-level function for 'compute'
 Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
   final img.Image? decoded = img.decodeImage(task.rawBytes);
   if (decoded == null) throw Exception("Failed to decode image");
@@ -87,14 +88,14 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   bool _isLoading = true;
   bool _isProcessingPages = false;
   String _errorMessage = '';
-   
+    
   // Zoom Controller
   final TransformationController _transformController = TransformationController();
 
   // Data Containers
   List<Uint8List> _previewImages = []; // For Screen
   List<List<int>> _readyToPrintChunks = []; // For Printer
-   
+    
   // Printing State
   bool _isPrinting = false;
   static const int _maxQueueSize = 5;
@@ -117,7 +118,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
       final prefs = await SharedPreferences.getInstance();
       int? savedWidth = prefs.getInt('printer_width_dots');
       _printerWidth = (savedWidth != null && savedWidth > 0) ? savedWidth : 384;
-       
+        
       await _prepareDocument();
     } catch (e) {
       debugPrint("Error loading settings: $e");
@@ -137,7 +138,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         if (cleanPath.startsWith('file://')) cleanPath = cleanPath.substring(7);
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (e) {}
         fileToProcess = File(cleanPath);
-        
+         
         if (!await fileToProcess.exists()) {
           throw Exception("${lang.translate('err_file_not_found')} $cleanPath");
         }
@@ -214,7 +215,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     if (await widget.printerService.isConnected()) return true;
     final prefs = await SharedPreferences.getInstance();
     final savedMac = prefs.getString('selected_printer_mac'); 
-    
+     
     if (savedMac != null && savedMac.isNotEmpty) {
        try { 
          return await widget.printerService.connect(savedMac); 
@@ -234,7 +235,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     }
 
     if (_isProcessingPages || _readyToPrintChunks.isEmpty) {
-       _showSnackBar("Preparing print data... please wait.", isError: false);
+       // Use "Working..." as a placeholder for preparing
+       _showSnackBar("${lang.translate('working')}...", isError: false);
        return;
     }
 
@@ -298,7 +300,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(lang.translate('preview_title')),
+        // FIXED: Key updated to 'title_preview' based on provided translations
+        title: Text(lang.translate('title_preview')),
         actions: [
           if (pendingCount > 0)
             Center(child: Padding(
@@ -333,7 +336,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                     children: [
                       const SizedBox(height: 20),
                       if (_previewImages.isEmpty && !_isProcessingPages)
-                          const Center(child: Text("No content found")),
+                          // UPDATED: Use 'err_decode' (Could not decode content) as closest match
+                          Center(child: Text(lang.translate('err_decode'))),
                       
                       // Render all pages
                       ..._previewImages.map((bytes) => Container(
@@ -397,7 +401,8 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                           isQueueFull 
                             ? lang.translate('btn_wait') 
                             : (_isProcessingPages 
-                                ? "ANALYZING..." 
+                                // UPDATED: "ANALYZING..." replaced with 'working' key
+                                ? lang.translate('working') 
                                 : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
                       ),
                       style: ElevatedButton.styleFrom(
@@ -433,7 +438,6 @@ class PrintUtils {
     );
     
     // Fill with White (255, 255, 255)
-    // FIX: Replaced undefined 'clear' with 'fill'
     img.fill(whiteBg, color: img.ColorRgb8(255, 255, 255));
 
     // Composite the source image (with alpha) onto the white background
