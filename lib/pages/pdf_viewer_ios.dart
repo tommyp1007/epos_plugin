@@ -48,7 +48,7 @@ Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
   // 3. Trim WhiteSpace (Top/Bottom/Left/Right)
   // This is the critical step to ensure we only print the receipt content
   img.Image? trimmed = PrintUtils.trimWhiteSpace(flatImage);
-   
+    
   // If trimming failed (empty page) or wasn't needed, use original
   img.Image imageToPrint = trimmed ?? flatImage;
 
@@ -104,16 +104,42 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
   static const int _maxQueueSize = 5;
   int _printerWidth = 384; 
 
+  // --- NEW: Realtime Queue Status Updates ---
+  Timer? _statusPollingTimer;
+  int _lastKnownQueueCount = 0;
+
   @override
   void initState() {
     super.initState();
+    // Start polling the printer service for queue updates
+    _startStatusPolling();
     _loadSettingsAndProcessFile();
   }
 
   @override
   void dispose() {
+    // Stop the timer when leaving the page to prevent memory leaks
+    _statusPollingTimer?.cancel();
     _transformController.dispose();
     super.dispose();
+  }
+
+  // --- NEW: Polling Function to Refresh UI when Queue Changes ---
+  void _startStatusPolling() {
+    // Check every 500ms
+    _statusPollingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (!mounted) return;
+      
+      // Check current pending jobs from service
+      int currentPending = widget.printerService.pendingJobs;
+      
+      // Only rebuild UI if the count has actually changed
+      if (currentPending != _lastKnownQueueCount) {
+        setState(() {
+          _lastKnownQueueCount = currentPending;
+        });
+      }
+    });
   }
 
   Future<void> _loadSettingsAndProcessFile() async {
@@ -184,7 +210,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         // Single Image
         pagesToProcessForPrinter.add(rawBytes);
         setState(() {
-           _previewImages.add(rawBytes);
+            _previewImages.add(rawBytes);
         });
       }
 
@@ -282,6 +308,11 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
 
       await widget.printerService.sendBytes(bytesToPrint);
 
+      // Force update locally immediately so UI reflects +1 pending immediately
+      setState(() {
+         _lastKnownQueueCount = widget.printerService.pendingJobs;
+      });
+
       if (mounted) {
         _showSnackBar("${lang.translate('msg_added_queue')} (${widget.printerService.pendingJobs} pending)");
       }
@@ -309,6 +340,7 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
     final lang = Provider.of<LanguageService>(context);
     final Size screenSize = MediaQuery.of(context).size;
 
+    // Use current live value from service
     int pendingCount = widget.printerService.pendingJobs;
     bool isQueueFull = pendingCount >= _maxQueueSize;
 
