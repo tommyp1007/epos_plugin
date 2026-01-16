@@ -48,7 +48,7 @@ Future<ProcessedResult> _heavyImageProcessing(ProcessingTask task) async {
   // 3. Trim WhiteSpace (Top/Bottom/Left/Right)
   // This is the critical step to ensure we only print the receipt content
   img.Image? trimmed = PrintUtils.trimWhiteSpace(flatImage);
-  
+   
   // If trimming failed (empty page) or wasn't needed, use original
   img.Image imageToPrint = trimmed ?? flatImage;
 
@@ -266,36 +266,21 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         return;
       }
 
-      // -------------------------------------------------------------
-      // SPEED OPTIMIZATION FIX
-      // -------------------------------------------------------------
       // Construct ESC/POS Commands
-      List<int> fullBytes = [];
-      fullBytes += [0x1B, 0x40]; // Init
-      fullBytes += [27, 97, 1]; // Center align
+      List<int> bytesToPrint = [];
+      bytesToPrint += [0x1B, 0x40]; // Init
+      bytesToPrint += [27, 97, 1]; // Center align
       
       // Combine all chunks seamlessly
       for (var processedBytes in _readyToPrintChunks) {
-        fullBytes += processedBytes;
+        bytesToPrint += processedBytes;
       }
       
       // Footer Commands (Feed & Cut)
-      fullBytes += [0x1B, 0x64, 0x04]; // Feed 4 lines
-      fullBytes += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
+      bytesToPrint += [0x1B, 0x64, 0x04]; // Feed 4 lines
+      bytesToPrint += [0x1D, 0x56, 0x42, 0x00]; // Cut Paper
 
-      // Send data in chunks to prevent printer buffer overflow (The Stutter Fix)
-      // Most thermal printers have a buffer size of 4KB to 8KB.
-      const int chunkSize = 2048; // 2KB chunks are safe and fast
-      for (var i = 0; i < fullBytes.length; i += chunkSize) {
-        int end = (i + chunkSize < fullBytes.length) ? i + chunkSize : fullBytes.length;
-        List<int> chunk = fullBytes.sublist(i, end);
-        
-        await widget.printerService.sendBytes(chunk);
-        
-        // Tiny sleep to allow printer buffer to clear slightly
-        // 5ms is usually enough to maintain continuous speed without stuttering
-        await Future.delayed(const Duration(milliseconds: 5));
-      }
+      await widget.printerService.sendBytes(bytesToPrint);
 
       if (mounted) {
         _showSnackBar("${lang.translate('msg_added_queue')} (${widget.printerService.pendingJobs} pending)");
@@ -342,10 +327,9 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
         ],
       ),
       backgroundColor: Colors.grey[200],
+      // --- BODY contains Content & Status Bar ---
       body: Stack(
-        // --- THIS IS THE FIX ---
         fit: StackFit.expand, 
-        // -----------------------
         children: [
           // 1. CONTENT LAYER
           if (_isLoading)
@@ -382,14 +366,14 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                       if (_isProcessingPages)
                         const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()),
                       
-                      const SizedBox(height: 80),
+                      const SizedBox(height: 20),
                     ],
                   ),
                 ),
               ),
             ),
 
-          // 2. STATUS BAR
+          // 2. STATUS BAR (Overlaid at Top)
           if (pendingCount > 0)
             Positioned(
               top: 0, left: 0, right: 0,
@@ -406,43 +390,38 @@ class _PdfViewerPageState extends State<PdfViewerPage> {
                 ),
               ),
             ),
-
-          // 3. PRINT BUTTON
-          if (!_isLoading)
-            Positioned(
-              bottom: 0, left: 0, right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, -2))]
-                ),
-                child: SafeArea(
-                  top: false,
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton.icon(
-                      icon: (_isPrinting || _isProcessingPages)
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : const Icon(Icons.print),
-                      label: Text(
-                          isQueueFull 
-                            ? lang.translate('btn_wait') 
-                            : (_isProcessingPages 
-                                ? lang.translate('working') 
-                                : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: (isQueueFull || _isProcessingPages) ? Colors.grey : Colors.blueAccent
-                      ),
-                      onPressed: (_isPrinting || isQueueFull || _isProcessingPages) ? null : _doPrint,
-                    ),
-                  ),
-                ),
-              ),
-            ),
         ],
+      ),
+      
+      // --- BOTTOM NAVIGATION BAR (FIXED BOTTOM BUTTON) ---
+      bottomNavigationBar: _isLoading ? null : Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, -2))]
+        ),
+        child: SafeArea(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            height: 82, // Fixed height for the bar (50 button + 32 padding)
+            child: ElevatedButton.icon(
+              icon: (_isPrinting || _isProcessingPages)
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Icon(Icons.print),
+              label: Text(
+                  isQueueFull 
+                    ? lang.translate('btn_wait') 
+                    : (_isProcessingPages 
+                        ? lang.translate('working') 
+                        : (_isPrinting ? lang.translate('btn_queueing') : lang.translate('btn_print_receipt')))
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: (isQueueFull || _isProcessingPages) ? Colors.grey : Colors.blueAccent,
+                minimumSize: const Size(double.infinity, 50), // Full width
+              ),
+              onPressed: (_isPrinting || isQueueFull || _isProcessingPages) ? null : _doPrint,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -465,15 +444,11 @@ class PrintUtils {
   }
 
   /// UPDATED: Smarter Trimming Logic
-  /// This now aggressively removes white space from ALL sides (Top/Bottom/Left/Right)
-  /// ensuring the receipt is cropped to its exact content before resizing.
   static img.Image? trimWhiteSpace(img.Image source) {
     int width = source.width;
     int height = source.height;
 
     // 1. SETTINGS
-    // Lower threshold (200) prevents light gray noise from being seen as content.
-    // Higher pixel count (10) prevents dust/speckles from preventing the crop.
     const int darknessThreshold = 200; 
     const int minDarkPixels = 10; 
 
@@ -495,31 +470,26 @@ class PrintUtils {
       }
     }
 
-    // If page is blank, return null (original will be used)
     if (minY == -1 || maxY == -1) return null;
 
     // 3. SCAN HORIZONTALLY (Find Left and Right Content)
-    // We ONLY scan within the MinY and MaxY we just found.
-    // This ignores headers/footers outside the receipt area.
     int minX = width;
     int maxX = 0;
 
     for (int x = 0; x < width; x++) {
       int darkPixelsInCol = 0;
-      // Loop only through the content rows
       for (int y = minY; y <= maxY; y++) {
          if (img.getLuminance(source.getPixel(x, y)) < darknessThreshold) {
            darkPixelsInCol++;
          }
       }
       
-      if (darkPixelsInCol >= 1) { // Even 1 dark pixel in the vertical column counts as content
+      if (darkPixelsInCol >= 1) { 
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
       }
     }
 
-    // Safety check if something went wrong with X detection
     if (minX >= maxX) {
       minX = 0; 
       maxX = width;
@@ -586,8 +556,8 @@ class PrintUtils {
           grayPlane[idx] = clamp(grayPlane[idx] + (error * 5 ~/ 16));
           
           if (x + 1 < width) {
-            int idx = i + width + 1;
-            grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
+              int idx = i + width + 1;
+              grayPlane[idx] = clamp(grayPlane[idx] + (error * 1 ~/ 16));
           }
         }
       }
