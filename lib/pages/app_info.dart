@@ -153,7 +153,7 @@ class AppInfoPage extends StatelessWidget {
                   const SizedBox(height: 5),
                   // --- VERSION ---
                   Text(
-                    "${lang.translate('lbl_version')} 1.0.5 (${lang.translate('lbl_build')} 24)",
+                    "${lang.translate('lbl_version')} 1.0.0 (${lang.translate('lbl_build')} 1)",
                     style: const TextStyle(color: Colors.grey)
                   ),
 
