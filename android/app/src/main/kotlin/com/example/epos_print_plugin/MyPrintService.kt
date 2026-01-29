@@ -1,4 +1,4 @@
-package com.example.epos_print_plugin
+package lhdn.myinvois.epos.printer
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

@@ -1,4 +1,4 @@
-package com.example.epos_print_plugin
+package lhdn.myinvois.epos.printer
 
 import io.flutter.embedding.android.FlutterActivity
 
